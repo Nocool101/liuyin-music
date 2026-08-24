@@ -1,6 +1,6 @@
 # 流音 (liuyin-music)
 
-一款基于 [lx-music-mobile](https://github.com/lyswhut/lx-music-mobile) 二次开发的 Android 音乐播放器，深度适配自建服务器（Subsonic + 自定义音源）场景，重点打磨了播放稳定性与后台/锁屏播放体验。
+一款基于 [lx-music-mobile](https://github.com/lyswhut/lx-music-mobile) 二次开发的 Android 音乐播放器，深度适配 [XCQ0607/lxserver](https://github.com/XCQ0607/lxserver) 自建服务器（Subsonic + 自定义音源）场景，重点打磨了播放稳定性与后台/锁屏播放体验。
 
 <p align="center">
   <img src="doc/screenshots/player_lyric.jpg" width="360" alt="播放页歌词界面" />
@@ -55,6 +55,7 @@ yarn dev
 ## 致谢
 
 - [lyswhut/lx-music-mobile](https://github.com/lyswhut/lx-music-mobile)：本项目基于其二次开发
+- [XCQ0607/lxserver](https://github.com/XCQ0607/lxserver)：本项目深度适配的自建服务端
 - [lyswhut/lx-music](https://github.com/lyswhut/lx-music-desktop) 及相关开源社区
 
 ## 许可证
