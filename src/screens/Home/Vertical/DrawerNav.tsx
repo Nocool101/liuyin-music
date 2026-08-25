@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { ScrollView, TouchableOpacity, View } from 'react-native'
+import { Image, ScrollView, TouchableOpacity, View } from 'react-native'
 import { useI18n } from '@/lang'
 import { useNavActiveId, useStatusbarHeight } from '@/store/common/hook'
 import { useTheme } from '@/store/theme/hook'
@@ -9,7 +9,7 @@ import { NAV_MENUS } from '@/config/constant'
 import type { InitState } from '@/store/common/state'
 // import { navigations } from '@/navigation'
 // import commonState from '@/store/common/state'
-import { exitApp, setNavActiveId } from '@/core/common'
+import { exitApp, setNavActiveId, showAboutModal } from '@/core/common'
 import Text from '@/components/common/Text'
 import { useSettingValue } from '@/store/setting/hook'
 
@@ -63,8 +63,8 @@ const Header = () => {
   return (
     <View style={{ paddingTop: statusBarHeight, backgroundColor: theme['c-primary-light-700-alpha-500'] }}>
       <View style={styles.header}>
-        <Icon name="logo" color={theme['c-primary-dark-100-alpha-300']} size={28} />
-        <Text style={styles.headerText} size={28} color={theme['c-primary-dark-100-alpha-300']}>LX Music</Text>
+        <Image source={require('@/resources/images/logo.png')} style={{ width: 34, height: 34 }} resizeMode="contain" />
+        <Text style={styles.headerText} size={28} color={theme['c-primary-dark-100-alpha-300']}>YL Music</Text>
       </View>
     </View>
   )
@@ -104,6 +104,9 @@ export default memo(() => {
 
   const handlePress = (id: IdType) => {
     switch (id) {
+      case 'nav_about':
+        showAboutModal()
+        return
       case 'nav_exit':
         void confirmDialog({
           message: global.i18n.t('exit_app_tip'),

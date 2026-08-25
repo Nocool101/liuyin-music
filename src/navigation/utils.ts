@@ -2,6 +2,7 @@ import { Navigation } from 'react-native-navigation'
 import {
   VERSION_MODAL,
   PACT_MODAL,
+  ABOUT_MODAL,
   SYNC_MODE_MODAL,
 } from './screenNames'
 import themeState from '@/store/theme/state'
@@ -59,6 +60,33 @@ export const showPactModal = () => {
         //     },
         //   },
         // },
+      },
+    },
+  })
+}
+
+export const showAboutModal = () => {
+  const theme = themeState.theme
+
+  void Navigation.showOverlay({
+    component: {
+      name: ABOUT_MODAL,
+      options: {
+        layout: {
+          componentBackgroundColor: 'transparent',
+        },
+        overlay: {
+          interceptTouchOutside: true,
+        },
+        statusBar: {
+          drawBehind: true,
+          visible: true,
+          style: getStatusBarStyle(theme.isDark),
+          backgroundColor: 'transparent',
+        },
+        navigationBar: {
+          backgroundColor: theme['c-content-background'],
+        },
       },
     },
   })

@@ -22,6 +22,7 @@ import {
   COMMENT_SCREEN,
   VERSION_MODAL,
   PACT_MODAL,
+  ABOUT_MODAL,
   SYNC_MODE_MODAL,
   SERVER_LIST_SCREEN,
   SERVER_EDIT_SCREEN,
@@ -31,6 +32,7 @@ import {
 } from './screenNames'
 import VersionModal from './components/VersionModal'
 import PactModal from './components/PactModal'
+import AboutModal from './components/AboutModal'
 import SyncModeModal from './components/SyncModeModal'
 
 function WrappedComponent(Component: any) {
@@ -54,6 +56,7 @@ export default () => {
   Navigation.registerComponent(COMMENT_SCREEN, () => WrappedComponent(Comment))
   Navigation.registerComponent(VERSION_MODAL, () => WrappedComponent(VersionModal))
   Navigation.registerComponent(PACT_MODAL, () => WrappedComponent(PactModal))
+  Navigation.registerComponent(ABOUT_MODAL, () => WrappedComponent(AboutModal))
   Navigation.registerComponent(SYNC_MODE_MODAL, () => WrappedComponent(SyncModeModal))
   Navigation.registerComponent(SERVER_LIST_SCREEN, () => WrappedComponent(ServerList))
   Navigation.registerComponent(SERVER_EDIT_SCREEN, () => WrappedComponent(ServerEdit))

@@ -13,7 +13,7 @@ import { storageDataPrefix } from '@/config/constant'
 import { saveData } from '@/plugins/storage'
 import { throttle } from '@/utils/common'
 import { getSelectedManagedFolder, saveFontSize, saveViewPrevState, setSelectedManagedFolder } from '@/utils/data'
-import { showPactModal as handleShowPactModal } from '@/navigation'
+import { showPactModal as handleShowPactModal, showAboutModal as handleShowAboutModal } from '@/navigation'
 import { hideDesktopLyricView } from '@/utils/nativeModules/lyricDesktop'
 import { getPersistedUriList, selectManagedFolder } from '@/utils/fs'
 
@@ -91,6 +91,9 @@ export const setNavActiveId = (id: Parameters<typeof commonActions.setNavActiveI
 
 export const showPactModal = () => {
   handleShowPactModal()
+}
+export const showAboutModal = () => {
+  handleShowAboutModal()
 }
 
 export const checkStoragePermissions = async() => {

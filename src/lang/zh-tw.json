@@ -165,6 +165,7 @@
   "music_toggle__confirm": "確認",
   "music_toggle__duplicate_tip": "列表中已存在相同的歌曲，是否將其移除並繼續？",
   "name": "標題：{name}",
+  "nav_about": "關於",
   "nav_exit": "退出應用",
   "nav_love": "我的清單",
   "nav_search": "搜尋",
