@@ -1,6 +1,12 @@
 package cn.lycool.app.player;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.media.AudioDeviceCallback;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Handler;
 import androidx.media3.common.AudioAttributes;
@@ -43,6 +49,8 @@ public class LiuyinPlayer {
     private boolean playerCreated = false;
     private long cacheMaxBytes = 1024L * 1024L * 1024L;
     private boolean handleAudioFocus = true;
+    /** 因耳机拔出/蓝牙断开而暂停：重连同类设备后自动续播（跨线程读写，需 volatile） */
+    private volatile boolean pausedByNoisy = false;
     private static final long ENDED_WATCHDOG_MS = 8_000;
     private Runnable endedWatchdog;
 
@@ -72,7 +80,10 @@ public class LiuyinPlayer {
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(
                         cache.getDataSourceFactory(upstreamFactory)))
                 .build();
+        // 耳机拔出/蓝牙断开时暂停、重新连接后续播：由 registerNoisyHandling 自行实现
+        // （ExoPlayer 内置 setHandleAudioBecomingNoisy(true) 只能暂停，无法感知重连）
         player.setHandleAudioBecomingNoisy(false);
+        registerNoisyHandling(player);
         applyAudioFocusConfig(player);
         player.addListener(new Player.Listener() {
             @Override
@@ -149,6 +160,65 @@ public class LiuyinPlayer {
         p.setAudioAttributes(attrs, handleAudioFocus);
     }
 
+    /**
+     * 音频输出设备变更处理：
+     * - 拔出耳机/蓝牙断开（ACTION_AUDIO_BECOMING_NOISY）：若正在播放则暂停，并记录 pausedByNoisy
+     * - 耳机/蓝牙耳机重新连接：若此前因断开而暂停，则自动续播
+     * 用户主动 play/pause/load 会清除 pausedByNoisy，避免陈旧标记导致意外续播。
+     */
+    private void registerNoisyHandling(ExoPlayer p) {
+        // ExoPlayer 绑定在创建它的线程（RN native_modules），
+        // 广播/设备回调都在主线程执行，必须 post 回播放器 looper，否则抛 "wrong thread" 崩溃
+        Handler playerHandler = new Handler(p.getApplicationLooper());
+        appContext.registerReceiver(new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                playerHandler.post(() -> {
+                    if (player == null || !player.isPlaying()) return;
+                    pausedByNoisy = true;
+                    player.pause();
+                });
+            }
+        }, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
+
+        AudioManager am = (AudioManager) appContext.getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) return;
+        am.registerAudioDeviceCallback(new AudioDeviceCallback() {
+            private boolean isHeadlike(AudioDeviceInfo d) {
+                switch (d.getType()) {
+                    case AudioDeviceInfo.TYPE_WIRED_HEADSET:
+                    case AudioDeviceInfo.TYPE_WIRED_HEADPHONES:
+                    case AudioDeviceInfo.TYPE_BLUETOOTH_A2DP:
+                    case AudioDeviceInfo.TYPE_BLE_HEADSET:
+                    case AudioDeviceInfo.TYPE_USB_HEADSET:
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+
+            @Override
+            public void onAudioDevicesAdded(AudioDeviceInfo[] addedDevices) {
+                if (!pausedByNoisy) return;
+                boolean reconnected = false;
+                for (AudioDeviceInfo d : addedDevices) {
+                    if (isHeadlike(d)) { reconnected = true; break; }
+                }
+                if (!reconnected) return;
+                // 不在主线程提前清标记：在播放器线程内检查并清除，
+                // 避免与用户主动 play/pause（同样在播放器线程）产生竞态
+                playerHandler.post(() -> {
+                    if (player == null || !pausedByNoisy) return;
+                    pausedByNoisy = false;
+                    int state = player.getPlaybackState();
+                    if (state == Player.STATE_READY || state == Player.STATE_BUFFERING) {
+                        player.play();
+                    }
+                });
+            }
+        }, null);
+    }
+
     public void setMediaSession(MediaSession session) {
         this.mediaSession = session;
     }
@@ -209,6 +279,7 @@ public class LiuyinPlayer {
             // 系统媒体通知/锁屏按钮在暂停或停止时仍保持可用。
             p.setMediaItem(realItem);
             disarmEndedWatchdog();
+            pausedByNoisy = false;
             p.prepare();
             if (positionMs > 0) p.seekTo((long) positionMs);
             p.play();
@@ -219,16 +290,19 @@ public class LiuyinPlayer {
 
     public void play() {
         disarmEndedWatchdog();
+        pausedByNoisy = false;
         ensurePlayer().play();
     }
 
     public void pause() {
         disarmEndedWatchdog();
+        pausedByNoisy = false;
         ensurePlayer().pause();
     }
 
     public void stop() {
         disarmEndedWatchdog();
+        pausedByNoisy = false;
         ensurePlayer().stop();
     }
 
