@@ -12,6 +12,11 @@ export default {
     state.statusbarHeight = size
     global.state_event.statusbarHeightUpdated(size)
   },
+  setNavbarHeight(size: number) {
+    if (state.navbarHeight == size) return
+    state.navbarHeight = size
+    global.state_event.navbarHeightUpdated(size)
+  },
   setComponentId(name: COMPONENT_IDS, id: string) {
     state.componentIds[name] = id
     global.state_event.componentIdsUpdated({ ...state.componentIds })

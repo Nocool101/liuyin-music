@@ -7,7 +7,7 @@ import { useMemo } from 'react'
 import { scaleSizeAbsHR } from '@/utils/pixelRatio'
 import { defaultHeaders } from './common/Image'
 import SizeView from './SizeView'
-import { useBgPic } from '@/store/common/hook'
+import { useBgPic, useNavbarHeight } from '@/store/common/hook'
 
 interface Props {
   children: React.ReactNode
@@ -19,6 +19,9 @@ export default ({ children }: Props) => {
   const theme = useTheme()
   const windowSize = useWindowSize()
   const pic = useBgPic()
+  // 原生实测的底部导航栏遮挡预留（px→dp 已在 SizeView 换算），
+  // 防止播放器等底部 UI 被手势条/导航栏遮挡（横屏全屏下尤其明显）
+  const navbarHeight = useNavbarHeight()
   // const [wh, setWH] = useState<{ width: number | string, height: number | string }>({ width: '100%', height: Dimensions.get('screen').height })
 
   // 固定宽高度 防止弹窗键盘时大小改变导致背景被缩放
@@ -47,11 +50,11 @@ export default ({ children }: Props) => {
         resizeMode="cover"
       >
       </ImageBackground>
-      <View style={{ flex: 1, flexDirection: 'column', backgroundColor: theme['c-main-background'] }}>
+      <View style={{ flex: 1, flexDirection: 'column', backgroundColor: theme['c-main-background'], paddingBottom: navbarHeight }}>
         {children}
       </View>
     </View>
-  ), [children, theme, windowSize.height, windowSize.width])
+  ), [children, theme, windowSize.height, windowSize.width, navbarHeight])
   const picComponent = useMemo(() => {
     return (
       <View style={{ flex: 1, overflow: 'hidden' }}>
@@ -63,12 +66,12 @@ export default ({ children }: Props) => {
         >
           <View style={{ flex: 1, flexDirection: 'column', backgroundColor: theme['c-content-background'], opacity: 0.76 }}></View>
         </ImageBackground>
-        <View style={{ flex: 1, flexDirection: 'column' }}>
+        <View style={{ flex: 1, flexDirection: 'column', paddingBottom: navbarHeight }}>
           {children}
         </View>
       </View>
     )
-  }, [children, pic, theme, windowSize.height, windowSize.width])
+  }, [children, pic, theme, windowSize.height, windowSize.width, navbarHeight])
 
   return (
     <>

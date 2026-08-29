@@ -129,6 +129,18 @@ public class UtilsModule extends ReactContextBaseJavaModule {
     // Not supported
   }
 
+  /**
+   * JS 启动时兜底读取：内容被 ROM 强制延伸到系统栏下面时需要预留的高度（px）。
+   * top：状态栏遮挡（竖屏），bottom：导航栏/手势条遮挡。详见 SystemUiHolder 注释。
+   */
+  @ReactMethod
+  public void getStatusBarReserve(Promise promise) {
+    WritableMap map = Arguments.createMap();
+    map.putDouble("top", SystemUiHolder.statusbarReserve);
+    map.putDouble("bottom", SystemUiHolder.navbarReserve);
+    promise.resolve(map);
+  }
+
   @ReactMethod
   public void isIgnoringBatteryOptimization(Promise promise) {
     promise.resolve(true);

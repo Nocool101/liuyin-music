@@ -100,6 +100,27 @@ export const onWindowSizeChange = (handler: (size: { width: number, height: numb
   return () => { eventListener.remove() }
 }
 
+/**
+ * 读取原生测量的系统栏预留高度（px）。
+ * top：竖屏下部分 ROM 忽略 decorFitsSystemWindows(true)，内容延伸到状态栏下面时需预留的高度；
+ * bottom：内容底部被导航栏（手势条）遮挡时需预留的高度。
+ * decorFits 生效时均为 0。
+ */
+export const getStatusBarReserve = async(): Promise<{ top: number, bottom: number }> => {
+  if (UtilsModule && UtilsModule.getStatusBarReserve) {
+    try {
+      const result = await UtilsModule.getStatusBarReserve()
+      return {
+        top: typeof result?.top === 'number' && result.top > 0 ? result.top : 0,
+        bottom: typeof result?.bottom === 'number' && result.bottom > 0 ? result.bottom : 0,
+      }
+    } catch {
+      return { top: 0, bottom: 0 }
+    }
+  }
+  return { top: 0, bottom: 0 }
+}
+
 export const isIgnoringBatteryOptimization = async(): Promise<boolean> => {
   if (UtilsModule && UtilsModule.isIgnoringBatteryOptimization) return UtilsModule.isIgnoringBatteryOptimization()
   return true
