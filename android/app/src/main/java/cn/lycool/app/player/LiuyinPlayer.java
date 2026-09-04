@@ -188,8 +188,14 @@ public class LiuyinPlayer {
     private float preDuckVolume = -1f;
     /** 因瞬态焦点丢失（来电等）而暂停，GAIN 后自动续播 */
     private volatile boolean pausedByTransient = false;
+    /** 因其他播放器永久抢占（AUDIOFOCUS_LOSS）而暂停：等其停止后可 reclaim 按键会话 */
+    private volatile boolean pausedByFocusLoss = false;
     /** 焦点请求被拒（如来电中），焦点可用后自动开始播放 */
     private boolean pendingPlayByFocus = false;
+    /** 外部播放器上一轮活跃状态（检测 active→inactive 下降沿） */
+    private boolean lastForeignActive = false;
+    /** 抢占按键会话的静音心跳序号（用户手动操作后使未完成的心跳失效） */
+    private int reclaimTickSeq = 0;
 
     private void registerFocusHandling(ExoPlayer p) {
         if (focusListener != null) return;
@@ -229,27 +235,7 @@ public class LiuyinPlayer {
     private void applyForeignPlaybackMute(java.util.List<android.media.AudioPlaybackConfiguration> configs) {
         if (!playerCreated || player == null) return;
         try {
-            boolean foreignActive = false;
-            if (configs != null) {
-                for (android.media.AudioPlaybackConfiguration c : configs) {
-                    try {
-                        android.media.AudioAttributes a = c.getAudioAttributes();
-                        if (a == null) continue;
-                        int usage = a.getUsage();
-                        int contentType = a.getContentType();
-                        // 本应用自己的播放器是 USAGE_MEDIA + CONTENT_TYPE_MUSIC，必须排除
-                        boolean foreign = usage == android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
-                                || usage == android.media.AudioAttributes.USAGE_ASSISTANT
-                                || (usage == android.media.AudioAttributes.USAGE_MEDIA
-                                    && contentType != android.media.AudioAttributes.CONTENT_TYPE_MUSIC);
-                        if (foreign) {
-                            foreignActive = true;
-                            break;
-                        }
-                    } catch (Throwable ignored) {
-                    }
-                }
-            }
+            boolean foreignActive = foreignActive(configs);
             cn.lycool.app.media.MediaLog.log(appContext, "foreign playback active=" + foreignActive
                     + " foreignMuted=" + foreignMuted + " preDuck=" + preDuckVolume);
             if (foreignActive && player.isPlaying() && !foreignMuted && preDuckVolume < 0) {
@@ -260,8 +246,71 @@ public class LiuyinPlayer {
                 foreignMuted = false;
                 restoreDuckVolume();
             }
+            // 外部播放器由活跃转停止，且我们此前被其永久抢占暂停：
+            // 静默重获焦点 + 心跳刷新会话活跃时间，夺回系统媒体按键路由目标，
+            // 之后双击耳机播放键即可恢复本应用（无论应用在前台/后台）
+            if (lastForeignActive && !foreignActive && pausedByFocusLoss) {
+                pausedByFocusLoss = false;
+                reclaimMediaButtonSession();
+            }
+            lastForeignActive = foreignActive;
         } catch (Throwable t) {
             android.util.Log.w("LiuyinPlayer", "foreign playback mute failed", t);
+        }
+    }
+
+    private boolean foreignActive(java.util.List<android.media.AudioPlaybackConfiguration> configs) {
+        if (configs == null) return false;
+        for (android.media.AudioPlaybackConfiguration c : configs) {
+            try {
+                android.media.AudioAttributes a = c.getAudioAttributes();
+                if (a == null) continue;
+                int usage = a.getUsage();
+                int contentType = a.getContentType();
+                // 本应用自己的播放器是 USAGE_MEDIA + CONTENT_TYPE_MUSIC，必须排除
+                boolean foreign = usage == android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+                        || usage == android.media.AudioAttributes.USAGE_ASSISTANT
+                        || (usage == android.media.AudioAttributes.USAGE_MEDIA
+                            && contentType != android.media.AudioAttributes.CONTENT_TYPE_MUSIC);
+                if (foreign) return true;
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 其他播放器停止后夺回媒体按键路由：
+     * 系统把耳机按键派发给"最近活跃（播放过）的媒体会话"，被抢占后即使对方已停止，
+     * 其暂停态会话仍是按键目标。以 0 音量短暂播放一拍再暂停，把本会话刷新为最近活跃，
+     * 之后双击耳机播放键即恢复本应用。用户手动操作（播放/暂停/停止）会使未完成的心跳失效。
+     */
+    private void reclaimMediaButtonSession() {
+        try {
+            if (!playerCreated || player == null) return;
+            if (player.getCurrentMediaItem() == null) return;
+            int state = player.getPlaybackState();
+            if (state != Player.STATE_READY && state != Player.STATE_BUFFERING) return;
+            if (player.isPlaying()) return;
+            if (!requestFocusIfNeeded()) return;
+            final int seq = ++reclaimTickSeq;
+            final float savedVolume = player.getVolume();
+            player.setVolume(0f);
+            player.play();
+            cn.lycool.app.media.MediaLog.log(appContext, "reclaim tick started");
+            Handler h = new Handler(player.getApplicationLooper());
+            h.postDelayed(() -> {
+                try {
+                    if (seq != reclaimTickSeq) return;
+                    if (player.isPlaying()) player.pause();
+                    player.setVolume(savedVolume);
+                    saveLastTrackPosition();
+                    cn.lycool.app.media.MediaLog.log(appContext, "reclaim tick done, media button session reclaimed");
+                } catch (Throwable ignored) {
+                }
+            }, 400);
+        } catch (Throwable t) {
+            android.util.Log.w("LiuyinPlayer", "reclaim media button session failed", t);
         }
     }
 
@@ -355,6 +404,7 @@ public class LiuyinPlayer {
 
     /** 内部恢复播放（耳机重连续播/看门狗重播/冷启动恢复）：确保已持有焦点 */
     private void resumePlaybackInternal() {
+        pausedByFocusLoss = false;
         if (!requestFocusIfNeeded()) {
             pendingPlayByFocus = true;
             return;
@@ -407,6 +457,7 @@ public class LiuyinPlayer {
                 case AudioManager.AUDIOFOCUS_LOSS:
                     // 被其他播放器永久抢占：暂停且不自动恢复
                     pausedByTransient = false;
+                    pausedByFocusLoss = true;
                     restoreDuckVolume();
                     abandonFocusInternal();
                     if (player.isPlaying()) {
@@ -560,6 +611,8 @@ public class LiuyinPlayer {
         disarmEndedWatchdog();
         pausedByNoisy = false;
         pausedByTransient = false;
+        pausedByFocusLoss = false;
+        reclaimTickSeq++;
         restoreDuckVolume();
         if (!requestFocusIfNeeded()) {
             pendingPlayByFocus = true;
@@ -578,7 +631,9 @@ public class LiuyinPlayer {
         disarmEndedWatchdog();
         pausedByNoisy = false;
         pausedByTransient = false;
+        pausedByFocusLoss = false;
         pendingPlayByFocus = false;
+        reclaimTickSeq++;
         // 用户主动暂停：若处于导航播报压低状态，先把音量还原，避免下次播放无声
         restoreDuckVolume();
         saveLastTrackPosition();
@@ -591,7 +646,9 @@ public class LiuyinPlayer {
         disarmEndedWatchdog();
         pausedByNoisy = false;
         pausedByTransient = false;
+        pausedByFocusLoss = false;
         pendingPlayByFocus = false;
+        reclaimTickSeq++;
         restoreDuckVolume();
         abandonFocusInternal();
         ensurePlayer().stop();
@@ -671,7 +728,10 @@ public class LiuyinPlayer {
         disarmEndedWatchdog();
         pausedByNoisy = false;
         pausedByTransient = false;
+        pausedByFocusLoss = false;
         pendingPlayByFocus = false;
+        reclaimTickSeq++;
+        lastForeignActive = false;
         restoreDuckVolume();
         abandonFocusInternal();
         if (playerCreated && player != null) {
