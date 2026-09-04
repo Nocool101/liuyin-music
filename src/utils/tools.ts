@@ -242,43 +242,17 @@ export const clipboardWriteText = (str: string) => {
 
 
 export const checkNotificationPermission = async() => {
+  // 只提醒一次：请求过（无论结果）后不再打扰，可在 设置-其他 里重置再次询问
   const isHide = await getData(storageDataPrefix.notificationTipEnable)
   if (isHide != null) return
   const enabled = await isNotificationsEnabled()
   if (enabled) return
-  return new Promise<void>((resolve) => {
-    Alert.alert(
-      global.i18n.t('notifications_check_title'),
-      global.i18n.t('notifications_check_tip'),
-      [
-        {
-          text: global.i18n.t('never_show'),
-          onPress: () => {
-            void saveData(storageDataPrefix.notificationTipEnable, '1')
-            toast(global.i18n.t('disagree_tip'))
-            resolve()
-          },
-        },
-        {
-          text: global.i18n.t('disagree'),
-          onPress: () => {
-            toast(global.i18n.t('disagree_tip'))
-            resolve()
-          },
-        },
-        {
-          text: global.i18n.t('agree_go'),
-          onPress: () => {
-            requestAnimationFrame(() => {
-              void requestNotificationPermission().then((result) => {
-                if (!result) toast(global.i18n.t('disagree_tip'))
-                resolve()
-              })
-            })
-          },
-        },
-      ],
-    )
+  void saveData(storageDataPrefix.notificationTipEnable, '1')
+  // 直接弹系统权限弹窗（Android 13+），不再弹应用内自定义提醒框
+  requestAnimationFrame(() => {
+    void requestNotificationPermission().then((result) => {
+      if (!result) toast(global.i18n.t('disagree_tip'))
+    })
   })
 }
 
@@ -288,39 +262,12 @@ export const checkIgnoringBatteryOptimization = async() => {
   if (isHide != null) return
   const enabled = await isIgnoringBatteryOptimization()
   if (enabled) return
-  return new Promise<void>((resolve) => {
-    Alert.alert(
-      global.i18n.t('ignoring_battery_optimization_check_title'),
-      global.i18n.t('ignoring_battery_optimization_check_tip'),
-      [
-        {
-          text: global.i18n.t('never_show'),
-          onPress: () => {
-            void saveData(storageDataPrefix.ignoringBatteryOptimizationTipEnable, '1')
-            toast(global.i18n.t('disagree_tip'))
-            resolve()
-          },
-        },
-        {
-          text: global.i18n.t('disagree'),
-          onPress: () => {
-            toast(global.i18n.t('disagree_tip'))
-            resolve()
-          },
-        },
-        {
-          text: global.i18n.t('agree_to'),
-          onPress: () => {
-            requestAnimationFrame(() => {
-              void requestIgnoreBatteryOptimization().then((result) => {
-                if (!result) toast(global.i18n.t('disagree_tip'))
-                resolve()
-              })
-            })
-          },
-        },
-      ],
-    )
+  void saveData(storageDataPrefix.ignoringBatteryOptimizationTipEnable, '1')
+  // 直接弹系统"忽略电池优化"弹窗，允许后即可后台播放
+  requestAnimationFrame(() => {
+    void requestIgnoreBatteryOptimization().then((result) => {
+      if (!result) toast(global.i18n.t('disagree_tip'))
+    })
   })
 }
 export const resetNotificationPermissionCheck = async() => {

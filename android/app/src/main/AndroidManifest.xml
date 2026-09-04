@@ -122,5 +122,19 @@
           <action android:name="androidx.media3.session.MediaSessionService" />
         </intent-filter>
       </service>
+
+      <!-- 蓝牙耳机/耳机线控媒体按键：应用未打开（进程不在前台）时把按键转发给
+           LiuyinMediaService 冷启动恢复播放 -->
+      <receiver android:name="androidx.media3.session.MediaButtonReceiver" android:exported="true">
+        <intent-filter>
+          <action android:name="android.intent.action.MEDIA_BUTTON" />
+        </intent-filter>
+      </receiver>
+
+      <!-- 移除已弃用的 react-native-track-player 遗留组件：
+           Media3 的 MediaSessionService 要求全应用只允许一个 MEDIA_BUTTON 接收器，
+           两个并存会导致启动即崩溃（IllegalStateException: found 2） -->
+      <receiver android:name="androidx.media.session.MediaButtonReceiver" tools:node="remove" />
+      <service android:name="com.guichaguri.trackplayer.service.MusicService" tools:node="remove" />
     </application>
 </manifest>

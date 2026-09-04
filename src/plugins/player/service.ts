@@ -2,7 +2,7 @@ import BackgroundTimer from 'react-native-background-timer'
 import playerState from '@/store/player/state'
 import { exitApp } from '@/core/common'
 import { playNext, handlePlaybackError, resetPlayErrorCount } from '@/core/player/player'
-import { addLiuyinPlayerListener, initLiuyinPlayer, liuyinPlay } from './liuyinPlayer'
+import { addLiuyinPlayerListener, initLiuyinPlayer, liuyinGetState, liuyinPlay } from './liuyinPlayer'
 
 let isInitialized = false
 
@@ -97,6 +97,16 @@ const registerPlaybackService = async() => {
   })
 
   isInitialized = true
+
+  // 状态回同步：JS 启动前原生可能已在播放（如蓝牙耳机按键在应用未打开时
+  // 冷启动恢复了上次曲目），把真实状态同步给 JS，避免界面显示与实际不符
+  void liuyinGetState().then((state) => {
+    if (state != 'playing') return
+    if (global.lx.gettingUrlId || global.lx.isChangingMusic) return
+    global.lx.waitingForPlayback = false
+    global.app_event.playerPlaying()
+    global.app_event.play()
+  })
 }
 
 

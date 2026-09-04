@@ -25,6 +25,8 @@ export enum COMPONENT_IDS {
   playDetail = 'playDetail',
   songlistDetail = 'songlistDetail',
   comment = 'comment',
+  serverList = 'serverList',
+  serverEdit = 'serverEdit',
 }
 
 export enum NAV_SHEAR_NATIVE_IDS {
@@ -54,6 +56,8 @@ export const storageDataPrefix = {
   syncAuthKey: '@sync_auth_key',
   syncHost: '@sync_host',
   syncHostHistory: '@sync_host_history',
+
+  firstLaunchPermissionsDone: '@first_launch_permissions_done',
 
   openStoragePath: '@open_storage_path',
   selectedManagedFolder: '@selected_managed_folder',

@@ -4,10 +4,12 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
@@ -41,6 +43,8 @@ import com.facebook.react.modules.core.DeviceEventManagerModule;
 public class LiuyinPlayer {
 
     private static LiuyinPlayer instance;
+
+    private static final String LAST_TRACK_PREFS = "liuyin_last_track";
 
     private Context appContext;
     private ReactApplicationContext reactContext;
@@ -140,15 +144,25 @@ public class LiuyinPlayer {
     }
 
     /**
-     * 音频焦点策略（JS 设置 player.isHandleAudioFocus）：
+     * 音频焦点策略（JS 设置 player.isHandleAudioFocus）——完全自管：
+     * Media3 内置焦点管理的压低音量固定为 20% 且不可定制，故改为自己请求/处理焦点：
      * - 其他播放器抢焦点（永久丢失）：暂停且不自动恢复，等用户手动再播
      * - 来电/语音助手/微信电话（瞬态丢失）：暂停，焦点归还后自动续播
-     * - 导航/消息提示音（可压低）：音量降到 20% 继续播，结束后还原
+     * - 导航/消息提示音播报（可压低丢失）：优先要求系统直接暂停本应用（setWillPauseWhenDucked），
+     *   播报结束自动恢复；若系统仍派发压低回调，则应用自行把音量降到 0，播报结束恢复。
+     * 注：部分国产 ROM（如荣耀 MagicOS）的"播报压低媒体"在系统混音层完成，
+     * 不派发任何焦点回调也不改流音量，应用侧无法拦截，属 ROM 限制。
      */
     public synchronized void setHandleAudioFocus(boolean enable) {
         if (handleAudioFocus == enable) return;
         handleAudioFocus = enable;
         if (!playerCreated) return;
+        if (!enable) {
+            abandonFocusInternal();
+            pausedByTransient = false;
+            pendingPlayByFocus = false;
+            restoreDuckVolume();
+        }
         applyAudioFocusConfig(player);
     }
 
@@ -157,7 +171,255 @@ public class LiuyinPlayer {
                 .setUsage(C.USAGE_MEDIA)
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .build();
-        p.setAudioAttributes(attrs, handleAudioFocus);
+        // 焦点完全自管（false），由 requestFocusIfNeeded/abandonFocusInternal 处理
+        p.setAudioAttributes(attrs, false);
+        registerFocusHandling(p);
+    }
+
+    // ---- 自管音频焦点 ----
+
+    private AudioManager audioManager;
+    private Handler focusHandler;
+    private AudioManager.OnAudioFocusChangeListener focusListener;
+    private android.media.AudioFocusRequest focusRequest;
+    /** 是否持有焦点（请求被拒后 false，等 GAIN 回调再播） */
+    private boolean hasFocus = false;
+    /** 导航播报压低期间记住的原音量（<0 表示未处于压低状态） */
+    private float preDuckVolume = -1f;
+    /** 因瞬态焦点丢失（来电等）而暂停，GAIN 后自动续播 */
+    private volatile boolean pausedByTransient = false;
+    /** 焦点请求被拒（如来电中），焦点可用后自动开始播放 */
+    private boolean pendingPlayByFocus = false;
+
+    private void registerFocusHandling(ExoPlayer p) {
+        if (focusListener != null) return;
+        audioManager = (AudioManager) appContext.getSystemService(Context.AUDIO_SERVICE);
+        // 焦点回调统一 post 回播放器 looper，保证与 play/pause 同线程
+        focusHandler = new Handler(p.getApplicationLooper());
+        focusListener = change -> {
+            Handler h = focusHandler;
+            if (h == null) return;
+            h.post(() -> handleFocusChange(change));
+        };
+        cn.lycool.app.media.MediaLog.log(appContext, "focus handling registered");
+        registerForeignPlaybackMonitor();
+    }
+
+    // ---- 外部播放器静音（导航播报等 ROM 混音层压低场景）----
+    // 荣耀等 ROM 对导航播报在系统混音层用 VolumeShaper 直接把媒体压到 20%，
+    // 且不派发任何焦点回调（dumpsys audio 实证），应用无法经焦点系统感知。
+    // 改用 AudioPlaybackCallback（公开 API，任何应用播放器启停均派发）：
+    // 检测到外部播放器（导航/语音助手/非音乐类媒体）活跃时把自身音量降到 0
+    // （混音层 0.2 × 0 = 0，彻底静音），外部播放结束后还原。
+    private volatile boolean foreignMuted = false;
+
+    private void registerForeignPlaybackMonitor() {
+        if (Build.VERSION.SDK_INT < 26) return;
+        if (audioManager == null) return;
+        audioManager.registerAudioPlaybackCallback(new AudioManager.AudioPlaybackCallback() {
+            @Override
+            public void onPlaybackConfigChanged(java.util.List<android.media.AudioPlaybackConfiguration> configs) {
+                Handler h = focusHandler;
+                if (h == null) return;
+                h.post(() -> applyForeignPlaybackMute(configs));
+            }
+        }, null);
+    }
+
+    private void applyForeignPlaybackMute(java.util.List<android.media.AudioPlaybackConfiguration> configs) {
+        if (!playerCreated || player == null) return;
+        try {
+            boolean foreignActive = false;
+            if (configs != null) {
+                for (android.media.AudioPlaybackConfiguration c : configs) {
+                    try {
+                        android.media.AudioAttributes a = c.getAudioAttributes();
+                        if (a == null) continue;
+                        int usage = a.getUsage();
+                        int contentType = a.getContentType();
+                        // 本应用自己的播放器是 USAGE_MEDIA + CONTENT_TYPE_MUSIC，必须排除
+                        boolean foreign = usage == android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+                                || usage == android.media.AudioAttributes.USAGE_ASSISTANT
+                                || (usage == android.media.AudioAttributes.USAGE_MEDIA
+                                    && contentType != android.media.AudioAttributes.CONTENT_TYPE_MUSIC);
+                        if (foreign) {
+                            foreignActive = true;
+                            break;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+            cn.lycool.app.media.MediaLog.log(appContext, "foreign playback active=" + foreignActive
+                    + " foreignMuted=" + foreignMuted + " preDuck=" + preDuckVolume);
+            if (foreignActive && player.isPlaying() && !foreignMuted && preDuckVolume < 0) {
+                foreignMuted = true;
+                preDuckVolume = player.getVolume();
+                player.setVolume(0f);
+            } else if (!foreignActive && foreignMuted) {
+                foreignMuted = false;
+                restoreDuckVolume();
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("LiuyinPlayer", "foreign playback mute failed", t);
+        }
+    }
+
+    /** 主动查询一次外部播放器状态（恢复播放后外部播放器可能仍在活跃，回调不会再触发） */
+    private void checkForeignPlaybackNow() {
+        if (Build.VERSION.SDK_INT < 26 || audioManager == null) return;
+        try {
+            applyForeignPlaybackMute(audioManager.getActivePlaybackConfigurations());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private boolean requestFocusIfNeeded() {
+        if (hasFocus || focusListener == null) return true;
+        if (audioManager == null) return true;
+        boolean granted;
+        if (Build.VERSION.SDK_INT >= 26) {
+            if (focusRequest == null) {
+                android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build();
+                focusRequest = new android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                        .setAudioAttributes(attrs)
+                        // 声明"不做压低、直接暂停"：系统对可压低焦点丢失将走暂停通道
+                        // （播报结束自动恢复），而非在混音层把音量压到 20%（荣耀等 ROM 行为）
+                        .setWillPauseWhenDucked(true)
+                        .setOnAudioFocusChangeListener(focusListener, focusHandler)
+                        .build();
+                // 注册"最后媒体按键接收者"（系统级记录，不随进程/会话死亡而清除）：
+                // 应用被划掉/杀死后，耳机播放键由 AudioService 通过该 PendingIntent 重新拉起，
+                // 这是"不开 app 双击耳机也能播放"的关键通路
+                try {
+                    Intent btn = new Intent(Intent.ACTION_MEDIA_BUTTON);
+                    btn.setComponent(new android.content.ComponentName(appContext,
+                            "androidx.media3.session.MediaButtonReceiver"));
+                    android.app.PendingIntent pi = android.app.PendingIntent.getBroadcast(appContext, 3527, btn,
+                            android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+                    java.lang.reflect.Method m = AudioManager.class.getMethod("setMediaButtonReceiver",
+                            android.app.PendingIntent.class);
+                    m.invoke(audioManager, pi);
+                    cn.lycool.app.media.MediaLog.log(appContext, "media button receiver registered");
+                } catch (Throwable t) {
+                    cn.lycool.app.media.MediaLog.log(appContext, "setMediaButtonReceiver failed: " + t);
+                }
+            }
+            granted = audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        } else {
+            granted = audioManager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        }
+        // 并行再走一次旧版请求接口（同一 listener）：部分国产 ROM（如荣耀）对新版
+        // AudioFocusRequest 的焦点回调派发存在兼容问题，只派发旧版监听通道。
+        // 两通道幂等（压低/恢复由 preDuckVolume 状态保护），重复回调无害。
+        try {
+            int legacy = audioManager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN);
+            if (legacy == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) granted = true;
+        } catch (Throwable ignored) {
+        }
+        hasFocus = granted;
+        cn.lycool.app.media.MediaLog.log(appContext, "requestAudioFocus granted=" + granted);
+        return granted;
+    }
+
+    private void abandonFocusInternal() {
+        pendingPlayByFocus = false;
+        hasFocus = false;
+        if (audioManager == null) return;
+        try {
+            if (Build.VERSION.SDK_INT >= 26 && focusRequest != null) {
+                audioManager.abandonAudioFocusRequest(focusRequest);
+            }
+            if (focusListener != null) {
+                audioManager.abandonAudioFocus(focusListener);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void restoreDuckVolume() {
+        foreignMuted = false;
+        if (preDuckVolume < 0) return;
+        float v = preDuckVolume;
+        preDuckVolume = -1f;
+        if (playerCreated && player != null) {
+            try { player.setVolume(v); } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** 内部恢复播放（耳机重连续播/看门狗重播/冷启动恢复）：确保已持有焦点 */
+    private void resumePlaybackInternal() {
+        if (!requestFocusIfNeeded()) {
+            pendingPlayByFocus = true;
+            return;
+        }
+        player.play();
+    }
+
+    private void handleFocusChange(int change) {
+        if (!playerCreated || player == null) {
+            cn.lycool.app.media.MediaLog.log(appContext, "focus change=" + change + " (player not created)");
+            return;
+        }
+        try {
+            cn.lycool.app.media.MediaLog.log(appContext, "focus change=" + change
+                    + " isPlaying=" + player.isPlaying()
+                    + " vol=" + player.getVolume()
+                    + " preDuck=" + preDuckVolume
+                    + " transient=" + pausedByTransient);
+            switch (change) {
+                case AudioManager.AUDIOFOCUS_GAIN:
+                    hasFocus = true;
+                    restoreDuckVolume();
+                    if (pendingPlayByFocus) {
+                        pendingPlayByFocus = false;
+                        player.play();
+                        break;
+                    }
+                    if (pausedByTransient) {
+                        pausedByTransient = false;
+                        int state = player.getPlaybackState();
+                        if (state == Player.STATE_READY || state == Player.STATE_BUFFERING) {
+                            player.play();
+                        }
+                    }
+                    break;
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                    // 来电/语音助手：暂停并保留焦点，GAIN 后自动续播
+                    if (player.isPlaying()) {
+                        pausedByTransient = true;
+                        player.pause();
+                    }
+                    break;
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                    // 导航/消息播报：音量降到 0 继续播，播报结束（GAIN）恢复
+                    if (player.isPlaying() && preDuckVolume < 0) {
+                        preDuckVolume = player.getVolume();
+                        player.setVolume(0f);
+                    }
+                    break;
+                case AudioManager.AUDIOFOCUS_LOSS:
+                    // 被其他播放器永久抢占：暂停且不自动恢复
+                    pausedByTransient = false;
+                    restoreDuckVolume();
+                    abandonFocusInternal();
+                    if (player.isPlaying()) {
+                        saveLastTrackPosition();
+                        player.pause();
+                    }
+                    break;
+                default:
+                    break;
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("LiuyinPlayer", "focus change handling failed", t);
+        }
     }
 
     /**
@@ -212,7 +474,7 @@ public class LiuyinPlayer {
                     pausedByNoisy = false;
                     int state = player.getPlaybackState();
                     if (state == Player.STATE_READY || state == Player.STATE_BUFFERING) {
-                        player.play();
+                        resumePlaybackInternal();
                     }
                 });
             }
@@ -235,7 +497,7 @@ public class LiuyinPlayer {
             // JS 未在窗口内加载下一首：重播当前曲目，保持音频持续
             android.util.Log.i("LiuyinPlayer", "ended watchdog: replay current item");
             player.seekTo(0);
-            player.play();
+            resumePlaybackInternal();
         };
         playerHandler.postDelayed(endedWatchdog, ENDED_WATCHDOG_MS);
     }
@@ -257,7 +519,11 @@ public class LiuyinPlayer {
 
     /** 加载并播放（单曲模型 + 静音占位队列，保证系统显示"下一曲"按钮） */
     public void load(String url, String title, String artist, String album, String artwork, double durationMs, double positionMs) {
+        // 注意：url 内含服务器认证参数，不得写入日志，只记录标题与是否成功保存
+        cn.lycool.app.media.MediaLog.log(appContext, "load: " + title + " @" + (long) positionMs + "ms");
         try {
+            saveLastTrack(url, title, artist, album, artwork, durationMs, positionMs);
+            cn.lycool.app.media.MediaLog.log(appContext, "load: last track saved");
             ExoPlayer p = ensurePlayer();
             MediaMetadata.Builder mb = new MediaMetadata.Builder()
                     .setTitle(title)
@@ -282,27 +548,52 @@ public class LiuyinPlayer {
             pausedByNoisy = false;
             p.prepare();
             if (positionMs > 0) p.seekTo((long) positionMs);
-            p.play();
+            startPlayback();
         } catch (Throwable t) {
             emit("ERROR", String.valueOf(t.getMessage()));
         }
     }
 
-    public void play() {
+    /** 统一的"开始播放"入口：先请求音频焦点，被拒（如来电中）则等 GAIN 后自动播放 */
+    private void startPlayback() {
+        ExoPlayer p = ensurePlayer();
         disarmEndedWatchdog();
         pausedByNoisy = false;
-        ensurePlayer().play();
+        pausedByTransient = false;
+        restoreDuckVolume();
+        if (!requestFocusIfNeeded()) {
+            pendingPlayByFocus = true;
+            return;
+        }
+        p.play();
+        // 恢复播放时外部播放器（如仍在播报的导航）可能已活跃且不会再有配置变更回调，主动查一次
+        checkForeignPlaybackNow();
+    }
+
+    public void play() {
+        startPlayback();
     }
 
     public void pause() {
         disarmEndedWatchdog();
         pausedByNoisy = false;
+        pausedByTransient = false;
+        pendingPlayByFocus = false;
+        // 用户主动暂停：若处于导航播报压低状态，先把音量还原，避免下次播放无声
+        restoreDuckVolume();
+        saveLastTrackPosition();
+        // 暂停时保留音频焦点：荣耀 MagicOS 的状态栏媒体标签依赖应用持有焦点，
+        // 释放会导致暂停后标签消失。焦点丢失（被其他应用抢占）走 handleFocusChange 处理。
         ensurePlayer().pause();
     }
 
     public void stop() {
         disarmEndedWatchdog();
         pausedByNoisy = false;
+        pausedByTransient = false;
+        pendingPlayByFocus = false;
+        restoreDuckVolume();
+        abandonFocusInternal();
         ensurePlayer().stop();
     }
 
@@ -328,10 +619,112 @@ public class LiuyinPlayer {
     }
 
     public void setVolume(double volume) {
-        ensurePlayer().setVolume((float) volume);
+        ExoPlayer p = ensurePlayer();
+        // 导航播报压低期间：暂存用户设置的新音量，播报结束后恢复为该值
+        if (preDuckVolume >= 0) {
+            preDuckVolume = (float) volume;
+            return;
+        }
+        p.setVolume((float) volume);
     }
 
     public void setRate(double rate) {
         ensurePlayer().setPlaybackSpeed((float) rate);
+    }
+
+    /** 持久化最近播放的曲目：蓝牙耳机/锁屏按键在应用未打开时冷启动恢复播放用 */
+    private void saveLastTrack(String url, String title, String artist, String album, String artwork, double durationMs, double positionMs) {
+        try {
+            if (url == null || url.isEmpty()) return;
+            appContext.getSharedPreferences(LAST_TRACK_PREFS, Context.MODE_PRIVATE).edit()
+                    .putString("url", url)
+                    .putString("title", title == null ? "" : title)
+                    .putString("artist", artist == null ? "" : artist)
+                    .putString("album", album == null ? "" : album)
+                    .putString("artwork", artwork == null ? "" : artwork)
+                    .putLong("durationMs", (long) durationMs)
+                    .putLong("positionMs", (long) positionMs)
+                    .apply();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 记录当前播放进度（暂停/断开耳机时调用），冷启动恢复时从该进度续播 */
+    public void saveLastTrackPosition() {
+        try {
+            if (!playerCreated || player == null || player.getCurrentMediaItem() == null) return;
+            long pos = player.getCurrentPosition();
+            if (pos < 0) pos = 0;
+            appContext.getSharedPreferences(LAST_TRACK_PREFS, Context.MODE_PRIVATE)
+                    .edit().putLong("positionMs", pos).apply();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * 划掉最近任务：停止并清空媒体项（锁屏/下拉媒体卡片因"无可播内容"消失），
+     * 但保留 MediaSession 与进程——Android 16 上耳机媒体按键只路由给存活会话，
+     * 之后双击播放键仍可唤醒续播（JS 存活走 JS 队列恢复，JS 已死走原生冷启动恢复）。
+     */
+    public void stopAndClearForTaskRemoved() {
+        saveLastTrackPosition();
+        disarmEndedWatchdog();
+        pausedByNoisy = false;
+        pausedByTransient = false;
+        pendingPlayByFocus = false;
+        restoreDuckVolume();
+        abandonFocusInternal();
+        if (playerCreated && player != null) {
+            player.stop();
+            player.clearMediaItems();
+        }
+    }
+
+    /**
+     * 蓝牙耳机/锁屏媒体按键在 JS 未运行（应用未打开/进程刚被系统拉起）时的处理：
+     * - 已有曲目：直接原生播放/暂停
+     * - 无曲目（冷启动）：从持久化记录恢复上次曲目并播放
+     * 切歌等需要 JS 参与的操作在冷启动时同样以"恢复播放"兜底。
+     */
+    public boolean handleColdMediaButton(String command) {
+        cn.lycool.app.media.MediaLog.log(appContext, "cold media button cmd=" + command
+                + " playerCreated=" + playerCreated);
+        try {
+            if (playerCreated && player != null && player.getCurrentMediaItem() != null) {
+                switch (command) {
+                    case "pause":
+                        saveLastTrackPosition();
+                        player.pause();
+                        return true;
+                    case "play":
+                        resumePlaybackInternal();
+                        return true;
+                    default: // playpause / next / prev
+                        if (player.isPlaying()) {
+                            saveLastTrackPosition();
+                            player.pause();
+                        } else {
+                            resumePlaybackInternal();
+                        }
+                        return true;
+                }
+            }
+            if ("pause".equals(command)) return false;
+            SharedPreferences sp = appContext.getSharedPreferences(LAST_TRACK_PREFS, Context.MODE_PRIVATE);
+            String url = sp.getString("url", "");
+            if (url.isEmpty()) return false;
+            load(url,
+                    sp.getString("title", ""),
+                    sp.getString("artist", ""),
+                    sp.getString("album", ""),
+                    sp.getString("artwork", ""),
+                    sp.getLong("durationMs", 0),
+                    sp.getLong("positionMs", 0));
+            android.util.Log.i("LiuyinPlayer", "cold media button: restored last track");
+            return true;
+        } catch (Throwable t) {
+            android.util.Log.w("LiuyinPlayer", "cold media button failed", t);
+            return false;
+        }
     }
 }

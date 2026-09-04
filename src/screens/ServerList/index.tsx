@@ -9,6 +9,8 @@ import { setConfigs, setActiveConfig, setConnected } from '@/store/server/action
 import { syncFavorites, startFavoritesSync } from '@/core/favorites'
 import { useStatusbarHeight } from '@/store/common/hook'
 import { useTheme } from '@/store/theme/hook'
+import { setComponentId } from '@/core/common'
+import { COMPONENT_IDS } from '@/config/constant'
 import { createStyle } from '@/utils/tools'
 
 interface ServerItemProps {
@@ -62,6 +64,13 @@ export default ({ componentId }: { componentId: string }) => {
   const [configs, setConfigs] = useState<LX.ServerConfig[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
+
+  // 注册 componentId：与 PlayDetail 等屏幕一致，返回主界面时
+  // 才能触发 componentIdsUpdated 事件，让抽屉（DrawerLayoutFixed）修复宽度重新可打开
+  useEffect(() => {
+    setComponentId(COMPONENT_IDS.serverList, componentId)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const loadData = useCallback(async () => {
     const [loadedConfigs, loadedActiveId] = await Promise.all([

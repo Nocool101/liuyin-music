@@ -46,6 +46,11 @@ public class MediaBridgeModule extends ReactContextBaseJavaModule {
         return NAME;
     }
 
+    /** JS 是否在运行（进程冷启动、JS 未加载时为 false，媒体按键走原生恢复播放） */
+    public static boolean hasContext() {
+        return sContext != null;
+    }
+
     public static void emitCommand(String command, long positionMs) {
         Command cmd = new Command(command, positionMs);
         ReactApplicationContext ctx = sContext;
@@ -99,6 +104,7 @@ public class MediaBridgeModule extends ReactContextBaseJavaModule {
             // 注意：不能用 startForegroundService —— Media3 的 MediaSessionService
             // 只在播放时才 startForeground，startForegroundService 会在 5 秒超时后杀进程
             getReactApplicationContext().startService(intent);
+            MediaLog.log(getReactApplicationContext(), "MediaBridge.start(): service start requested from JS");
             Log.i(TAG, "media service start requested");
         } catch (Throwable t) {
             Log.w(TAG, "media service start failed", t);

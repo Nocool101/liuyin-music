@@ -1,4 +1,4 @@
-import { AppState, BackHandler, Dimensions, NativeEventEmitter, NativeModules } from 'react-native'
+import { BackHandler, Dimensions, NativeEventEmitter, NativeModules } from 'react-native'
 
 const UtilsModule = NativeModules.UtilsModule || null
 
@@ -43,24 +43,30 @@ export const isNotificationsEnabled = () => {
   return Promise.resolve(true)
 }
 
-export const requestNotificationPermission = async() => new Promise<boolean>((resolve) => {
-  if (!UtilsModule || !UtilsModule.openNotificationPermissionActivity) {
-    resolve(true)
-    return
+/** 轮询检查权限状态（系统弹窗/设置页操作期间结果异步变化），超时返回最后一次检查结果 */
+const pollPermissionUntil = async(check: () => Promise<boolean>, timeoutMs = 60000, intervalMs = 800): Promise<boolean> => {
+  const start = Date.now()
+  let result = await check()
+  while (!result && Date.now() - start < timeoutMs) {
+    await new Promise<void>((r) => setTimeout(r, intervalMs))
+    result = await check()
   }
-  let subscription = AppState.addEventListener('change', (state) => {
-    if (state != 'active') return
-    subscription.remove()
-    setTimeout(() => {
-      void isNotificationsEnabled().then(resolve)
-    }, 1000)
-  })
-  UtilsModule.openNotificationPermissionActivity().then((result: boolean) => {
-    if (result) return
-    subscription.remove()
-    resolve(false)
-  })
-})
+  return result
+}
+
+/**
+ * 请求通知权限：
+ * - Android 13+ 先弹系统运行时权限弹窗（点"允许"直接授权）；
+ *   被拒后自动跳转系统应用通知设置页
+ * - Android 13 以下直接跳转系统应用通知设置页
+ * 返回 true 表示已开启（或需轮询确认），false 表示无法发起请求
+ */
+export const requestNotificationPermission = async(): Promise<boolean> => {
+  if (!UtilsModule || !UtilsModule.openNotificationPermissionActivity) return true
+  const started = await UtilsModule.openNotificationPermissionActivity()
+  if (!started) return false
+  return pollPermissionUntil(() => isNotificationsEnabled())
+}
 
 export const shareText = async(shareTitle: string, title: string, text: string): Promise<void> => {
   if (UtilsModule && UtilsModule.shareText) UtilsModule.shareText(shareTitle, title, text)
@@ -126,21 +132,12 @@ export const isIgnoringBatteryOptimization = async(): Promise<boolean> => {
   return true
 }
 
-export const requestIgnoreBatteryOptimization = async() => new Promise<boolean>((resolve) => {
-  if (!UtilsModule || !UtilsModule.requestIgnoreBatteryOptimization) {
-    resolve(true)
-    return
-  }
-  let subscription = AppState.addEventListener('change', (state) => {
-    if (state != 'active') return
-    subscription.remove()
-    setTimeout(() => {
-      void isIgnoringBatteryOptimization().then(resolve)
-    }, 1000)
-  })
-  UtilsModule.requestIgnoreBatteryOptimization().then((result: boolean) => {
-    if (result) return
-    subscription.remove()
-    resolve(false)
-  })
-})
+/**
+ * 请求忽略电池优化：弹系统确认弹窗，用户点"允许"即直接授权，无需进设置
+ */
+export const requestIgnoreBatteryOptimization = async(): Promise<boolean> => {
+  if (!UtilsModule || !UtilsModule.requestIgnoreBatteryOptimization) return true
+  const started = await UtilsModule.requestIgnoreBatteryOptimization()
+  if (!started) return false
+  return pollPermissionUntil(() => isIgnoringBatteryOptimization())
+}

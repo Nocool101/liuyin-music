@@ -12,6 +12,7 @@ import { exitApp } from '@/utils/nativeModules/utils'
 import { updateSetting } from '@/core/common'
 import { checkUpdate } from '@/core/version'
 import { initDeeplink } from '@/core/init/deeplink'
+import { requestFirstLaunchPermissions } from '@/core/init/permissions'
 import settingState from '@/store/setting/state'
 
 const Content = () => {
@@ -90,6 +91,8 @@ const Footer = ({ componentId }: { componentId: string }) => {
             onPress: () => {
               void checkUpdate()
               void initDeeplink()
+              // 新用户同意协议后，依次弹出系统权限弹窗
+              void requestFirstLaunchPermissions()
             },
           }],
         )
