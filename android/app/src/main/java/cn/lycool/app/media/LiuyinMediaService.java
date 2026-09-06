@@ -15,6 +15,9 @@ import androidx.media3.session.MediaSession;
 import androidx.media3.session.SessionCommands;
 import androidx.media3.session.MediaSessionService;
 
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+
 import cn.lycool.app.MainActivity;
 import cn.lycool.app.player.LiuyinPlayer;
 
@@ -204,6 +207,32 @@ public class LiuyinMediaService extends MediaSessionService {
                                 return playerCommand;
                         }
                     }
+
+                    @Override
+                    public ListenableFuture<MediaSession.MediaItemsWithStartPosition> onPlaybackResumption(
+                            MediaSession session, MediaSession.ControllerInfo controller) {
+                        // Android 13+ PlaybackResumption：系统在媒体按键/媒体卡上要恢复我们时回调。
+                        // 即使进程被杀、应用被划掉，只要 Session 仍注册且组件可被系统用媒体键拉起，
+                        // 这里就能把播放接回来（有当前曲目则续播；进程冷启动则按持久化记录恢复）。
+                        MediaLog.log(LiuyinMediaService.this, "onPlaybackResumption called");
+                        try {
+                            // 确保已装有曲目：有当前项则续播，进程冷启动则按持久化记录加载
+                            liuyinPlayer.handleColdMediaButton("play");
+                            androidx.media3.common.MediaItem cur = liuyinPlayer.getPlayer().getCurrentMediaItem();
+                            if (cur == null) {
+                                return Futures.immediateFuture(
+                                        new MediaSession.MediaItemsWithStartPosition(java.util.Collections.emptyList(), 0, 0));
+                            }
+                            long pos = liuyinPlayer.getPlayer().getCurrentPosition();
+                            MediaLog.log(LiuyinMediaService.this, "onPlaybackResumption resume pos=" + pos);
+                            return Futures.immediateFuture(new MediaSession.MediaItemsWithStartPosition(
+                                    java.util.Collections.singletonList(cur), 0, pos));
+                        } catch (Throwable t) {
+                            MediaLog.log(LiuyinMediaService.this, "onPlaybackResumption failed: " + t);
+                            return Futures.immediateFuture(
+                                    new MediaSession.MediaItemsWithStartPosition(java.util.Collections.emptyList(), 0, 0));
+                        }
+                    }
                 })
                 .build();
         liuyinPlayer.setMediaSession(mediaSession);
@@ -264,11 +293,12 @@ public class LiuyinMediaService extends MediaSessionService {
         }
     }
 
-    /** 供 LiuyinPlayer 心跳结束（静默态下 Media3 重发了标签）后再次摘除 */
-    public static void scheduleMediaLabelRemoval() {
+    /** 供 LiuyinPlayer 心跳结束（静默态下 Media3 重发了标签）后立即摘除，并加一次兜底 */
+    public static void removeMediaLabelNow() {
         LiuyinMediaService s = instance;
         if (s == null || s.mainHandler == null) return;
-        MediaLog.log(s, "schedule media label removal after reclaim tick");
+        MediaLog.log(s, "remove media label now (after reclaim tick)");
+        s.mainHandler.post(s::removeMediaLabel);
         s.mainHandler.postDelayed(s::removeMediaLabel, TASK_REMOVED_LABEL_REMOVE_DELAY_MS);
     }
 

@@ -198,10 +198,14 @@ public class LiuyinPlayer {
     private boolean pendingPlayByFocus = false;
     /** 外部播放器上一轮活跃状态（检测 active→inactive 下降沿） */
     private boolean lastForeignActive = false;
+    /** 上一轮「任何其他应用在播放」状态（默认下沿触发心跳夺回按键路由，不限 contentType） */
+    private boolean lastOtherActive = false;
     /** 划掉任务后的静默态：抑制按键会话心跳重发（心跳的 play() 会让 Media3 重新发布媒体标签） */
     private volatile boolean taskRemovedSuppressed = false;
     /** 最近一次"是否正在播放"缓存（跨线程只读查询用；ExoPlayer 只允许在创建线程访问） */
     private volatile boolean lastIsPlaying = false;
+    /** 用户最近一次正常音量基线（非压低态）；用于音量被误压到 0 后自愈，默认 1.0 */
+    private volatile float lastUserVolume = 1f;
     /** 抢占按键会话的静音心跳序号（用户手动操作后使未完成的心跳失效） */
     private int reclaimTickSeq = 0;
 
@@ -244,8 +248,10 @@ public class LiuyinPlayer {
         if (!playerCreated || player == null) return;
         try {
             boolean foreignActive = foreignActive(configs);
-            cn.lycool.app.media.MediaLog.log(appContext, "foreign playback active=" + foreignActive
-                    + " foreignMuted=" + foreignMuted + " preDuck=" + preDuckVolume);
+            boolean otherActive = anyOtherActive(configs);
+            cn.lycool.app.media.MediaLog.log(appContext, "playback active foreign=" + foreignActive
+                    + " other=" + otherActive + " foreignMuted=" + foreignMuted + " preDuck=" + preDuckVolume
+                    + " focusLoss=" + pausedByFocusLoss);
             if (foreignActive && player.isPlaying() && !foreignMuted && preDuckVolume < 0) {
                 foreignMuted = true;
                 preDuckVolume = player.getVolume();
@@ -254,17 +260,31 @@ public class LiuyinPlayer {
                 foreignMuted = false;
                 restoreDuckVolume();
             }
-            // 外部播放器由活跃转停止，且我们此前被其永久抢占暂停：
+            // 任何其他应用由活跃转停止，且我们此前被其永久抢占暂停（pausedByFocusLoss）：
             // 静默重获焦点 + 心跳刷新会话活跃时间，夺回系统媒体按键路由目标，
-            // 之后双击耳机播放键即可恢复本应用（无论应用在前台/后台）
-            if (lastForeignActive && !foreignActive && pausedByFocusLoss) {
+            // 之后双击耳机播放键即可恢复本应用（无论应用在前台/后台）。
+            // 用 anyOtherActive（不限 contentType）取代 foreignActive（其排除 MUSIC 类，
+            // 导致用「音乐」类 app 抢占后心跳不触发、耳机键唤醒失败）。
+            if (lastOtherActive && !otherActive && pausedByFocusLoss) {
                 pausedByFocusLoss = false;
                 reclaimMediaButtonSession();
             }
             lastForeignActive = foreignActive;
+            lastOtherActive = otherActive;
         } catch (Throwable t) {
             android.util.Log.w("LiuyinPlayer", "foreign playback mute failed", t);
         }
+    }
+
+    /**
+     * 是否存在「其他应用」的活跃播放：只要存在活跃播放配置且本播放器未在播放，
+     * 即可断定有别的应用在出声（含音乐/视频/播报）。用于心跳夺回按键路由，
+     * 与只用于「压低音量」的 foreignActive（排除 MUSIC 类）区分。
+     */
+    private boolean anyOtherActive(java.util.List<android.media.AudioPlaybackConfiguration> configs) {
+        if (configs == null || configs.isEmpty()) return false;
+        if (playerCreated && player != null && player.isPlaying()) return false;
+        return true;
     }
 
     private boolean foreignActive(java.util.List<android.media.AudioPlaybackConfiguration> configs) {
@@ -300,12 +320,16 @@ public class LiuyinPlayer {
             int state = player.getPlaybackState();
             if (state != Player.STATE_READY && state != Player.STATE_BUFFERING) return;
             if (player.isPlaying()) return;
-            if (!requestFocusIfNeeded()) return;
+            if (!requestFocusIfNeeded()) {
+                cn.lycool.app.media.MediaLog.log(appContext, "reclaim aborted: focus not granted");
+                return;
+            }
             final int seq = ++reclaimTickSeq;
             final float savedVolume = player.getVolume();
             player.setVolume(0f);
             player.play();
-            cn.lycool.app.media.MediaLog.log(appContext, "reclaim tick started");
+            cn.lycool.app.media.MediaLog.log(appContext, "reclaim tick started (vol=" + savedVolume
+                    + " state=" + state + " suppressed=" + taskRemovedSuppressed);
             Handler h = new Handler(player.getApplicationLooper());
             h.postDelayed(() -> {
                 try {
@@ -313,15 +337,18 @@ public class LiuyinPlayer {
                     if (player.isPlaying()) player.pause();
                     player.setVolume(savedVolume);
                     saveLastTrackPosition();
-                    cn.lycool.app.media.MediaLog.log(appContext, "reclaim tick done, media button session reclaimed");
-                    // 静默态（划掉任务后）：心跳的 play() 触发 Media3 重发了媒体标签，
-                    // 跳完一拍后重新摘除，保持"划掉后无标签"的静默外观
+                    // 心跳后主动查一次活跃配置，确认是否有别的会话仍占用路由
+                    cn.lycool.app.media.MediaLog.log(appContext,
+                            "reclaim tick done, button session reclaimed (vol restored=" + savedVolume
+                            + " hasFocus=" + hasFocus + " foreignMuted=" + foreignMuted);
+                    // 静默态（划掉任务后）：心跳的 play() 会让 Media3 重新发布媒体标签，
+                    // 跳完一拍后立即摘除（瞬时闪现，尽快还原"划掉后无标签"的外观）
                     if (taskRemovedSuppressed) {
-                        cn.lycool.app.media.LiuyinMediaService.scheduleMediaLabelRemoval();
+                        cn.lycool.app.media.LiuyinMediaService.removeMediaLabelNow();
                     }
                 } catch (Throwable ignored) {
                 }
-            }, 400);
+            }, 500);
         } catch (Throwable t) {
             android.util.Log.w("LiuyinPlayer", "reclaim media button session failed", t);
         }
@@ -409,6 +436,7 @@ public class LiuyinPlayer {
         if (preDuckVolume < 0) return;
         float v = preDuckVolume;
         preDuckVolume = -1f;
+        cn.lycool.app.media.MediaLog.log(appContext, "restoreDuckVolume to " + v);
         if (playerCreated && player != null) {
             try { player.setVolume(v); } catch (Throwable ignored) {
             }
@@ -419,11 +447,28 @@ public class LiuyinPlayer {
     private void resumePlaybackInternal() {
         taskRemovedSuppressed = false;
         pausedByFocusLoss = false;
+        // 与 startPlayback 对齐：归一音量（还原被压低的音量）后再播放，
+        // 否则耳机键/冷启动唤醒时可能带着卡住的 preDuck/foreignMute 而无声
+        restoreDuckVolume();
         if (!requestFocusIfNeeded()) {
             pendingPlayByFocus = true;
             return;
         }
+        selfHealVolume();
         player.play();
+        // 恢复播放时外部播放器可能仍活跃且不再有回调，主动重查一次并重新判定是否需压低
+        checkForeignPlaybackNow();
+    }
+
+    /** 音量自愈：非压低态下若音量停在 0（外部占用/心跳结束后未还原的竞态），恢复到用户音量基线 */
+    private void selfHealVolume() {
+        if (!playerCreated || player == null) return;
+        if (preDuckVolume >= 0) return; // 正处于合法压低态，交给 GAIN/还原
+        if (player.getVolume() < 0.01f) {
+            cn.lycool.app.media.MediaLog.log(appContext,
+                    "self-heal volume from 0 to " + lastUserVolume);
+            player.setVolume(lastUserVolume);
+        }
     }
 
     /** 是否处于通话态（系统来电铃声/系统通话/VoIP 通话如微信语音） */
@@ -663,6 +708,7 @@ public class LiuyinPlayer {
             pendingPlayByFocus = true;
             return;
         }
+        selfHealVolume();
         p.play();
         // 恢复播放时外部播放器（如仍在播报的导航）可能已活跃且不会再有配置变更回调，主动查一次
         checkForeignPlaybackNow();
@@ -734,6 +780,7 @@ public class LiuyinPlayer {
             preDuckVolume = (float) volume;
             return;
         }
+        lastUserVolume = (float) volume;
         p.setVolume((float) volume);
     }
 
@@ -787,6 +834,7 @@ public class LiuyinPlayer {
         pendingPlayByFocus = false;
         reclaimTickSeq++;
         lastForeignActive = false;
+        lastOtherActive = false;
         restoreDuckVolume();
         taskRemovedSuppressed = true;
         if (playerCreated && player != null && player.isPlaying()) {
