@@ -5,6 +5,8 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import androidx.core.app.TaskStackBuilder;
 import androidx.media3.common.ForwardingPlayer;
 import androidx.media3.common.Player;
@@ -29,6 +31,11 @@ public class LiuyinMediaService extends MediaSessionService {
     private MediaSession mediaSession;
     private static LiuyinMediaService instance;
 
+    /** 划掉任务后延时摘除媒体标签：等待 Media3 处理完暂停事件的通知更新，避免刚摘又被发布 */
+    private static final long TASK_REMOVED_LABEL_REMOVE_DELAY_MS = 800L;
+    private static final long TASK_REMOVED_LABEL_REMOVE_RETRY_MS = 5000L;
+    private Handler mainHandler;
+
     public static LiuyinMediaService getInstance() {
         return instance;
     }
@@ -42,6 +49,7 @@ public class LiuyinMediaService extends MediaSessionService {
 
         // 绑定真实播放器（单例，与 JS 共享同一 ExoPlayer 实例）
         LiuyinPlayer liuyinPlayer = LiuyinPlayer.getInstance(getApplicationContext());
+        mainHandler = new Handler(Looper.getMainLooper());
 
         Intent intent = new Intent(this, MainActivity.class);
         PendingIntent pi = TaskStackBuilder.create(this)
@@ -208,19 +216,60 @@ public class LiuyinMediaService extends MediaSessionService {
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
-        // 从最近任务划掉：暂停并清空媒体项（下拉面板/锁屏媒体卡片随"无可播内容"消失），
-        // 但保留会话与进程——Android 16 上媒体按键只会路由给存活的 MediaSession
-        // （AudioManager.setMediaButtonReceiver 已从框架移除，无 GMS 媒体恢复服务），
-        // 双击耳机播放键仍能把会话"唤醒"续播，且 JS 状态保持可完整恢复队列。
-        MediaLog.log(this, "onTaskRemoved: stop & clear items, keep session alive");
+        // 从最近任务划掉：立即暂停并摘除媒体标签（状态栏/锁屏）。
+        // 不清队列、不弃焦点、不杀会话、不 stopSelf：
+        // Android 16 上耳机媒体按键只路由给存活的 MediaSession，
+        // 彻底清理会使其失效（见 docs/adr/0003）。
+        // 摘除后进入静默态（LiuyinPlayer.taskRemovedSuppressed）：
+        // 抑制按键会话心跳的 0 音量 play()（它会让 Media3 重新发布标签），
+        // 恢复播放（耳机键/JS/冷启动）即退出静默态，标签随播放重新出现。
+        // 应用在后台（未划掉）时永不触发本方法，故不受影响。
+        MediaLog.log(this, "onTaskRemoved: pause & remove media label, keep session alive");
         try {
-            LiuyinPlayer.getInstance(getApplicationContext()).stopAndClearForTaskRemoved();
+            LiuyinPlayer.getInstance(getApplicationContext()).pauseForTaskRemoved();
         } catch (Throwable ignored) {
         }
+        // 延时摘除：等 Media3 异步处理完暂停事件的通知更新（暂停态以普通 notify 发布标签）；
+        // 二次兜底清理晚到的更新
+        mainHandler.postDelayed(this::removeMediaLabel, TASK_REMOVED_LABEL_REMOVE_DELAY_MS);
+        mainHandler.postDelayed(this::removeMediaLabel, TASK_REMOVED_LABEL_REMOVE_RETRY_MS);
+    }
+
+    /** 摘除媒体标签（暂停态）。恢复播放时 Media3 会重新发布通知。 */
+    private void removeMediaLabel() {
         try {
-            stopForeground(true);
-        } catch (Throwable ignored) {
+            // 若已恢复播放（耳机键唤醒等）则不摘。
+            // 注意：ExoPlayer 只允许在创建线程访问，这里可能运行在主线程，
+            // 必须用缓存态（isPlayingCached），不能调 isPlaying()
+            if (LiuyinPlayer.getInstance(getApplicationContext()).isPlayingCached()) return;
+            MediaLog.log(this, "remove media label, keep session");
+            stopForeground(STOP_FOREGROUND_REMOVE);
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm == null) return;
+            // Media3 默认通知使用自有渠道（default_channel_id），不在我们的 liuyin_media 通道内，
+            // 按通知 ID 兜底取消；暂停态下 Media3 以普通 notify 发布，stopForeground 摘不到它
+            nm.cancel(androidx.media3.session.DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                for (android.service.notification.StatusBarNotification n : nm.getActiveNotifications()) {
+                    if (n.getNotification() == null) continue;
+                    String ch = n.getNotification().getChannelId();
+                    if (CHANNEL_ID.equals(ch)
+                            || androidx.media3.session.DefaultMediaNotificationProvider.DEFAULT_CHANNEL_ID.equals(ch)) {
+                        nm.cancel(n.getId());
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            MediaLog.log(this, "remove media label failed: " + t);
         }
+    }
+
+    /** 供 LiuyinPlayer 心跳结束（静默态下 Media3 重发了标签）后再次摘除 */
+    public static void scheduleMediaLabelRemoval() {
+        LiuyinMediaService s = instance;
+        if (s == null || s.mainHandler == null) return;
+        MediaLog.log(s, "schedule media label removal after reclaim tick");
+        s.mainHandler.postDelayed(s::removeMediaLabel, TASK_REMOVED_LABEL_REMOVE_DELAY_MS);
     }
 
     @Override

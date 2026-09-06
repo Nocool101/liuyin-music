@@ -92,6 +92,7 @@ public class LiuyinPlayer {
         player.addListener(new Player.Listener() {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
+                lastIsPlaying = isPlaying;
                 emit("STATE", isPlaying ? "playing" : "paused");
             }
 
@@ -150,6 +151,9 @@ public class LiuyinPlayer {
      * - 来电/语音助手/微信电话（瞬态丢失）：暂停，焦点归还后自动续播
      * - 导航/消息提示音播报（可压低丢失）：优先要求系统直接暂停本应用（setWillPauseWhenDucked），
      *   播报结束自动恢复；若系统仍派发压低回调，则应用自行把音量降到 0，播报结束恢复。
+     * - 通话态（getMode 为 RINGTONE/IN_CALL/IN_COMMUNICATION，即系统来电或微信等 VoIP）：
+     *   压低回调与 LOSS 一律按瞬态丢失处理——直接暂停并保留焦点，通话结束（GAIN）自动续播，
+     *   不降音量继续播（微信挂断后可能派发 LOSS 而非 GAIN，故 LOSS 同样按瞬态兜底）。
      * 注：部分国产 ROM（如荣耀 MagicOS）的"播报压低媒体"在系统混音层完成，
      * 不派发任何焦点回调也不改流音量，应用侧无法拦截，属 ROM 限制。
      */
@@ -194,6 +198,10 @@ public class LiuyinPlayer {
     private boolean pendingPlayByFocus = false;
     /** 外部播放器上一轮活跃状态（检测 active→inactive 下降沿） */
     private boolean lastForeignActive = false;
+    /** 划掉任务后的静默态：抑制按键会话心跳重发（心跳的 play() 会让 Media3 重新发布媒体标签） */
+    private volatile boolean taskRemovedSuppressed = false;
+    /** 最近一次"是否正在播放"缓存（跨线程只读查询用；ExoPlayer 只允许在创建线程访问） */
+    private volatile boolean lastIsPlaying = false;
     /** 抢占按键会话的静音心跳序号（用户手动操作后使未完成的心跳失效） */
     private int reclaimTickSeq = 0;
 
@@ -306,6 +314,11 @@ public class LiuyinPlayer {
                     player.setVolume(savedVolume);
                     saveLastTrackPosition();
                     cn.lycool.app.media.MediaLog.log(appContext, "reclaim tick done, media button session reclaimed");
+                    // 静默态（划掉任务后）：心跳的 play() 触发 Media3 重发了媒体标签，
+                    // 跳完一拍后重新摘除，保持"划掉后无标签"的静默外观
+                    if (taskRemovedSuppressed) {
+                        cn.lycool.app.media.LiuyinMediaService.scheduleMediaLabelRemoval();
+                    }
                 } catch (Throwable ignored) {
                 }
             }, 400);
@@ -404,12 +417,22 @@ public class LiuyinPlayer {
 
     /** 内部恢复播放（耳机重连续播/看门狗重播/冷启动恢复）：确保已持有焦点 */
     private void resumePlaybackInternal() {
+        taskRemovedSuppressed = false;
         pausedByFocusLoss = false;
         if (!requestFocusIfNeeded()) {
             pendingPlayByFocus = true;
             return;
         }
         player.play();
+    }
+
+    /** 是否处于通话态（系统来电铃声/系统通话/VoIP 通话如微信语音） */
+    private boolean isInCallMode() {
+        if (audioManager == null) return false;
+        int mode = audioManager.getMode();
+        return mode == AudioManager.MODE_RINGTONE
+                || mode == AudioManager.MODE_IN_CALL
+                || mode == AudioManager.MODE_IN_COMMUNICATION;
     }
 
     private void handleFocusChange(int change) {
@@ -448,13 +471,34 @@ public class LiuyinPlayer {
                     }
                     break;
                 case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
-                    // 导航/消息播报：音量降到 0 继续播，播报结束（GAIN）恢复
+                    // 通话态（微信等 VoIP 来电，部分 ROM 派发"可压低"回调）：
+                    // 与瞬态丢失同路——还原音量并直接暂停，GAIN 后自动续播
+                    if (isInCallMode()) {
+                        restoreDuckVolume();
+                        if (player.isPlaying()) {
+                            pausedByTransient = true;
+                            player.pause();
+                        }
+                        break;
+                    }
+                    // 普通媒体占用（导航/消息播报）：音量降到 0 继续播，播报结束（GAIN）恢复
                     if (player.isPlaying() && preDuckVolume < 0) {
                         preDuckVolume = player.getVolume();
                         player.setVolume(0f);
                     }
                     break;
                 case AudioManager.AUDIOFOCUS_LOSS:
+                    // 通话态下的 LOSS（VoIP 挂断后可能派发 LOSS 而非 GAIN）：
+                    // 按瞬态处理，保留焦点等 GAIN 自动续播，不当成"被永久抢占"
+                    if (isInCallMode()) {
+                        restoreDuckVolume();
+                        pausedByTransient = true;
+                        if (player.isPlaying()) {
+                            saveLastTrackPosition();
+                            player.pause();
+                        }
+                        break;
+                    }
                     // 被其他播放器永久抢占：暂停且不自动恢复
                     pausedByTransient = false;
                     pausedByFocusLoss = true;
@@ -609,6 +653,7 @@ public class LiuyinPlayer {
     private void startPlayback() {
         ExoPlayer p = ensurePlayer();
         disarmEndedWatchdog();
+        taskRemovedSuppressed = false;
         pausedByNoisy = false;
         pausedByTransient = false;
         pausedByFocusLoss = false;
@@ -629,6 +674,7 @@ public class LiuyinPlayer {
 
     public void pause() {
         disarmEndedWatchdog();
+        taskRemovedSuppressed = false;
         pausedByNoisy = false;
         pausedByTransient = false;
         pausedByFocusLoss = false;
@@ -644,6 +690,7 @@ public class LiuyinPlayer {
 
     public void stop() {
         disarmEndedWatchdog();
+        taskRemovedSuppressed = false;
         pausedByNoisy = false;
         pausedByTransient = false;
         pausedByFocusLoss = false;
@@ -673,6 +720,11 @@ public class LiuyinPlayer {
     public boolean isPlaying() {
         if (!playerCreated) return false;
         return player.isPlaying();
+    }
+
+    /** 线程安全的"是否正在播放"查询（读缓存，任意线程可调；供摘标签等跨线程场景使用） */
+    public boolean isPlayingCached() {
+        return playerCreated && lastIsPlaying;
     }
 
     public void setVolume(double volume) {
@@ -719,11 +771,14 @@ public class LiuyinPlayer {
     }
 
     /**
-     * 划掉最近任务：停止并清空媒体项（锁屏/下拉媒体卡片因"无可播内容"消失），
-     * 但保留 MediaSession 与进程——Android 16 上耳机媒体按键只路由给存活会话，
-     * 之后双击播放键仍可唤醒续播（JS 存活走 JS 队列恢复，JS 已死走原生冷启动恢复）。
+     * 划掉最近任务：暂停并进入静默态——保留播放队列、音频焦点与 MediaSession，
+     * 媒体标签由 LiuyinMediaService 立即摘除。
+     * 静默态下抑制按键会话心跳（其 0 音量 play() 会触发 Media3 重发标签）；
+     * 恢复播放（耳机键/JS/冷启动）即退出静默态。
+     * 耳机键唤醒依赖存活的会话与队列，任何清理式处理都会使其失效（docs/adr/0003）。
+     * 保留焦点：荣耀 MagicOS 的状态栏媒体标签依赖应用持有焦点。
      */
-    public void stopAndClearForTaskRemoved() {
+    public void pauseForTaskRemoved() {
         saveLastTrackPosition();
         disarmEndedWatchdog();
         pausedByNoisy = false;
@@ -733,10 +788,9 @@ public class LiuyinPlayer {
         reclaimTickSeq++;
         lastForeignActive = false;
         restoreDuckVolume();
-        abandonFocusInternal();
-        if (playerCreated && player != null) {
-            player.stop();
-            player.clearMediaItems();
+        taskRemovedSuppressed = true;
+        if (playerCreated && player != null && player.isPlaying()) {
+            player.pause();
         }
     }
 
