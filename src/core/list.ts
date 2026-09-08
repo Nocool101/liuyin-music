@@ -81,8 +81,8 @@ export const updateListMusicPosition = async(listId: string, position: number, i
 /**
  * 覆盖列表内的歌曲
  */
-export const overwriteListMusics = async(listId: string, musicInfos: LX.Music.MusicInfo[]) => {
-  await global.list_event.list_music_overwrite(listId, musicInfos)
+export const overwriteListMusics = async(listId: string, musicInfos: LX.Music.MusicInfo[], isRemote: boolean = false) => {
+  await global.list_event.list_music_overwrite(listId, musicInfos, isRemote)
 }
 
 /**

@@ -100,6 +100,10 @@ public class LiuyinPlayer {
             public void onPlaybackStateChanged(int state) {
                 switch (state) {
                     case Player.STATE_ENDED:
+                        // 记录结束位置/内容时长：流被截断时 JS 侧据此判定"提前结束"而非正常播完
+                        cn.lycool.app.media.MediaLog.log(appContext, "ended at "
+                                + (playerCreated && player != null ? player.getCurrentPosition() : -1) + "/"
+                                + (playerCreated && player != null ? player.getDuration() : -1) + "ms");
                         emit("ENDED", null);
                         // 看门狗：若 JS 在窗口内未加载下一首（后台 JS 挂起/网络卡死），
                         // 重播当前曲目保证持续有声；JS 恢复后收到新的 ENDED 再自动切歌。
@@ -123,6 +127,11 @@ public class LiuyinPlayer {
             public void onPlayerError(PlaybackException error) {
                 Throwable cause = error;
                 while (cause.getCause() != null) cause = cause.getCause();
+                // 完整错误链写入文件日志：线上（荣耀等 ROM）logcat 不可用，这是唯一的错误详情来源
+                cn.lycool.app.media.MediaLog.log(appContext, "player error pos="
+                        + (playerCreated && player != null ? player.getCurrentPosition() : -1) + "ms "
+                        + error.getMessage()
+                        + " (" + cause.getClass().getName() + ": " + cause.getMessage() + ")");
                 emit("ERROR", error.getMessage() + " (" + cause.getClass().getSimpleName() + ": " + cause.getMessage() + ")");
             }
         });
@@ -659,8 +668,14 @@ public class LiuyinPlayer {
 
     /** 加载并播放（单曲模型 + 静音占位队列，保证系统显示"下一曲"按钮） */
     public void load(String url, String title, String artist, String album, String artwork, double durationMs, double positionMs) {
-        // 注意：url 内含服务器认证参数，不得写入日志，只记录标题与是否成功保存
-        cn.lycool.app.media.MediaLog.log(appContext, "load: " + title + " @" + (long) positionMs + "ms");
+        // 注意：url 内含服务器认证参数，不得写入日志——只记录 scheme://host/path（去掉 query）
+        String safeUrl = "";
+        try {
+            android.net.Uri uri = android.net.Uri.parse(url);
+            safeUrl = uri.getScheme() + "://" + uri.getHost() + uri.getPath();
+        } catch (Throwable ignored) {
+        }
+        cn.lycool.app.media.MediaLog.log(appContext, "load: " + title + " @" + (long) positionMs + "ms url=" + safeUrl);
         try {
             saveLastTrack(url, title, artist, album, artwork, durationMs, positionMs);
             cn.lycool.app.media.MediaLog.log(appContext, "load: last track saved");

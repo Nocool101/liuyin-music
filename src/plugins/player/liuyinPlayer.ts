@@ -107,7 +107,18 @@ export const liuyinClearCache = async(): Promise<void> => {
   try { await LiuyinPlayer.clearCache() } catch (err) { /* ignore */ }
 }
 
+export const liuyinRemoveCache = async(url: string): Promise<boolean> => {
+  if (!LiuyinPlayer || !url) return false
+  try { return await LiuyinPlayer.removeCache(url) ?? false } catch (err) { return false }
+}
+
 export const liuyinGetState = async(): Promise<string> => {
   if (!LiuyinPlayer) return 'paused'
   try { return await LiuyinPlayer.getState() ?? 'paused' } catch (err) { return 'paused' }
+}
+
+/** JS 侧文件日志（写入应用外部目录 liuyin_media.log，logcat 不可用的 ROM 上的唯一诊断通道） */
+export const liuyinNativeLog = (msg: string) => {
+  if (!LiuyinPlayer) return
+  try { LiuyinPlayer.nativeLog(msg) } catch (err) { /* ignore */ }
 }

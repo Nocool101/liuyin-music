@@ -1,4 +1,4 @@
-import { isInitialized, initial as playerInitial, isEmpty, setPause, setPlay, setResource, setStop, initTrackInfo } from '@/plugins/player'
+import { isInitialized, initial as playerInitial, isEmpty, setPause, setPlay, setResource, setStop, initTrackInfo, getDuration, removeCache } from '@/plugins/player'
 import {
   setStatusText,
 } from '@/core/player/playStatus'
@@ -22,6 +22,7 @@ import {
 } from '@/core/player/tempPlayList'
 import { getMusicUrl, getPicPath, getLyricInfo } from '@/core/music'
 import { getPlayQuality } from '@/core/music/utils'
+import { getProgressSampleTime, setProgress } from '@/core/player/progress'
 import { removeMusicUrl } from '@/utils/data'
 import { requestMsg } from '@/utils/message'
 import { getRandom } from '@/utils/common'
@@ -32,6 +33,7 @@ import { LIST_IDS } from '@/config/constant'
 import { addListMusics, removeListMusics } from '@/core/list'
 import { addDislikeInfo } from '@/core/dislikeList'
 import { toggleFavorite } from '@/core/favorites'
+import { liuyinNativeLog } from '@/plugins/player/liuyinPlayer'
 
 // import { checkMusicFileAvailable } from '@renderer/utils/music'
 
@@ -172,6 +174,7 @@ export const setMusicUrl = (musicInfo: LX.Music.MusicInfo | LX.Download.ListItem
     setResource(musicInfo, url, playerState.progress.nowPlayTime)
   }).catch((err: any) => {
     console.log(err)
+    liuyinNativeLog(`setMusicUrl failed ${createGettingUrlId(musicInfo)}: ${err?.message ?? err}`)
     setStatusText(err.message as string)
     global.app_event.error()
     addDelayNextTimeout()
@@ -196,6 +199,7 @@ export const handlePlaybackError = async(message?: string) => {
   if (global.lx.gettingUrlId) return // 正在解析新链接，旧曲目报错可忽略
 
   playErrorCount++
+  liuyinNativeLog(`playback error #${playErrorCount} ${(playMusicInfo as any).id ?? ''}: ${message ?? 'unknown'}`)
 
   // 下载/本地文件没有"换源"可解析，直接切下一首
   if ('progress' in playMusicInfo) {
@@ -219,6 +223,96 @@ export const handlePlaybackError = async(message?: string) => {
   const targetQuality = getPlayQuality(settingState.setting['player.playQuality'], playMusicInfo)
   void removeMusicUrl(playMusicInfo, targetQuality).catch(() => {})
   setMusicUrl(playMusicInfo, true)
+}
+
+// ---- 提前结束恢复 ----
+// 网络流被截断（CDN 链接过期返回不完整内容、媒体缓存条目损坏、源站断流）时，
+// ExoPlayer 会"干净地"报 STATE_ENDED，与正常播完无法区分，导致歌曲没放完就自动
+// 切到下一首。用歌曲元数据时长（interval）校验实际内容时长：内容明显偏短即判定
+// 为提前结束，丢弃坏链接与坏缓存后重新解析、从头重播，而不是误切歌。
+const endedRecovery = {
+  songId: '',
+  count: 0,
+}
+const MAX_ENDED_RECOVERY = 1
+// 实际内容时长与元数据时长的容差（换源版本长度略有差异）
+const ENDED_DURATION_TOLERANCE = 15
+
+export const resetEndedRecovery = () => {
+  endedRecovery.songId = ''
+  endedRecovery.count = 0
+}
+
+const parseIntervalSeconds = (interval?: string): number | null => {
+  if (!interval) return null
+  const parts = interval.split(':').map(Number)
+  if (!parts.length || parts.some(n => !Number.isFinite(n) || n < 0)) return null
+  return parts.reduce((acc, n) => acc * 60 + n, 0)
+}
+
+/**
+ * ENDED 事件校验：内容被截断的提前结束触发恢复并返回 true（已接管，勿切歌）；
+ * 自然播完（或无法校验）返回 false。
+ */
+export const verifyPlaybackEnded = async(): Promise<boolean> => {
+  const playMusicInfo = playerState.playMusicInfo
+  const musicInfo = playMusicInfo.musicInfo
+  // 仅在线歌曲可校验（元数据时长来自搜索/列表结果）
+  if (!musicInfo || 'progress' in musicInfo || musicInfo.source == 'local') return false
+  if (global.lx.isChangingMusic || global.lx.isPlayedStop) return false
+
+  const interval = parseIntervalSeconds(musicInfo.interval)
+  if (!interval || interval <= 0) return false
+
+  // STATE_ENDED 时 getDuration 为实际收到内容的时长：被截断的内容明显短于元数据时长
+  const duration = await getDuration()
+  // 校验是异步的，期间用户可能已手动切歌
+  if (playerState.playMusicInfo.musicInfo?.id != musicInfo.id) return false
+  if (duration <= 0) return false
+  const expected = interval - ENDED_DURATION_TOLERANCE
+
+  // 信号一：原生内容时长（MP3 等按时长推算的格式，截断后时长会变短）
+  if (duration >= expected) {
+    resetEndedRecovery()
+    return false
+  }
+  // 信号二：JS 侧最近采样的播放位置（FLAC/M4A 等容器元数据会谎报完整时长，
+  // 截断后原生 duration/position 仍是完整值，只能靠真实播放位置识别）。
+  // 进度轮询在熄屏/暂停时停止，此时 nowPlayTime 是冻结旧值不可信，
+  // 仅在采样足够新鲜（正在播放/刚暂停）时参与判定。
+  if (Date.now() - getProgressSampleTime() >= 5_000) {
+    console.log('playback ended prematurely:', duration, 'expect', interval, '(progress stale, skip position check)')
+  } else {
+    const played = playerState.progress.nowPlayTime
+    if (played >= expected) {
+      resetEndedRecovery()
+      return false
+    }
+    console.log('playback ended prematurely:', duration, played, 'expect', interval)
+  }
+
+  if (endedRecovery.songId != musicInfo.id) {
+    endedRecovery.songId = musicInfo.id
+    endedRecovery.count = 0
+  }
+  // 多次恢复仍被截断（该源本身就是短版内容），按正常结束切歌，避免死循环
+  if (endedRecovery.count >= MAX_ENDED_RECOVERY) {
+    resetEndedRecovery()
+    return false
+  }
+  endedRecovery.count++
+
+  setStatusText(global.i18n.t('player__stream_truncated_retry'))
+  const targetQuality = getPlayQuality(settingState.setting['player.playQuality'], musicInfo)
+  void removeMusicUrl(musicInfo, targetQuality).catch(() => {})
+  if (global.lx.playerPlayUrl) {
+    void removeCache(global.lx.playerPlayUrl).catch(() => {})
+    global.lx.playerPlayUrl = ''
+  }
+  // 进度停在截断点，必须清零后重新加载，否则会从旧位置续播
+  setProgress(0, 0)
+  setMusicUrl(musicInfo, true)
+  return true
 }
 
 // 恢复上次播放的状态

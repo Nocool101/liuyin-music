@@ -149,10 +149,10 @@ export class AppEvent extends Event {
     this.emit('lyricOffsetUpdate')
   }
 
-  // 我的列表内歌曲改变事件
-  myListMusicUpdate(ids: string[]) {
+  // 我的列表内歌曲改变事件（isRemote：是否由服务器同步等远程操作触发）
+  myListMusicUpdate(ids: string[], isRemote: boolean = false) {
     if (!ids.length) return
-    this.emit('myListMusicUpdate', ids)
+    this.emit('myListMusicUpdate', ids, isRemote)
   }
 
   // 下载列表改变事件

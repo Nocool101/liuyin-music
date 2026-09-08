@@ -145,6 +145,22 @@ public class LiuyinPlayerModule extends ReactContextBaseJavaModule {
     }
 
     @ReactMethod
+    public void removeCache(String key, Promise promise) {
+        try {
+            promise.resolve(PlayerCache.getInstance(getReactApplicationContext()).remove(key));
+        } catch (Throwable t) {
+            promise.reject("CACHE_REMOVE_ERROR", t);
+        }
+    }
+
+    /** JS 侧文件日志通道（应用 logcat 在部分 ROM 上不可用，统一写 liuyin_media.log） */
+    @ReactMethod
+    public void nativeLog(String msg) {
+        if (msg == null) return;
+        cn.lycool.app.media.MediaLog.log(getReactApplicationContext(), "[js] " + msg);
+    }
+
+    @ReactMethod
     public void getState(Promise promise) {
         promise.resolve(LiuyinPlayer.getInstance(getReactApplicationContext()).isPlaying() ? "playing" : "paused");
     }

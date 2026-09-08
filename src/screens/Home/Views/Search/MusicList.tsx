@@ -30,7 +30,12 @@ export default forwardRef<MusicListType, {}>((props, ref) => {
         const page = 1
         searchInfoRef.current.text = text
         searchInfoRef.current.source = source
-        return search(text, page, source).then((list) => {
+        // 聚合搜索渐进渲染：每个音源返回即刷新列表，不等最慢的源
+        return search(text, page, source, (partialList) => {
+          if (isUnmountedRef.current || !partialList.length) return
+          listRef.current?.setList(partialList, false, source == 'all')
+          listRef.current?.setStatus('idle')
+        }).then((list) => {
           // const result = setListInfo(listDetail, id, page)
           if (isUnmountedRef.current) return
           requestAnimationFrame(() => {
@@ -55,7 +60,11 @@ export default forwardRef<MusicListType, {}>((props, ref) => {
   const handleRefresh: OnlineListProps['onRefresh'] = () => {
     const page = 1
     listRef.current?.setStatus('refreshing')
-    search(searchInfoRef.current.text, page, searchInfoRef.current.source).then((list) => {
+    search(searchInfoRef.current.text, page, searchInfoRef.current.source, (partialList) => {
+      if (isUnmountedRef.current || !partialList.length) return
+      listRef.current?.setList(partialList, false, searchInfoRef.current.source == 'all')
+      listRef.current?.setStatus('idle')
+    }).then((list) => {
       // const result = setListInfo(listDetail, searchMusicState.listDetailInfo.id, page)
       if (isUnmountedRef.current) return
       listRef.current?.setList(list, false, searchInfoRef.current.source == 'all')

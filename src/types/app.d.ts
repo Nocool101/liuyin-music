@@ -36,6 +36,8 @@ interface GlobalData {
   isEnableSyncLog: boolean
   isEnableUserApiLog: boolean
   playerTrackId: string
+  /** 当前加载的播放直链（用于提前结束恢复时清理对应的媒体缓存条目） */
+  playerPlayUrl: string
 
   qualityList: LX.QualityList
   apis: Partial<LX.UserApi.UserApiSources>

@@ -49,4 +49,5 @@ export {
   isEmpty,
   useBufferProgress,
   initTrackInfo,
+  removeCache,
 } from './utils'

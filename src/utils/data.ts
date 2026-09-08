@@ -340,8 +340,23 @@ export const removeListMusics = async(ids: string[]): Promise<void> => {
 }
 
 
-export const getMusicUrl = async(musicInfo: LX.Music.MusicInfo, type: LX.Quality) => getData<string>(`${storageDataPrefix.musicUrl}${musicInfo.id}_${type}`).then((url) => url ?? '')
-export const saveMusicUrl = async(musicInfo: LX.Music.MusicInfo, type: LX.Quality, url: string) => saveData(`${storageDataPrefix.musicUrl}${musicInfo.id}_${type}`, url)
+// CDN 直链普遍带时效签名，过期后可能返回 403 或"200 但内容截断"（播放器报
+// ENDED 误判为播完）。缓存 2 小时后强制重新解析，避免复用过期链接。
+const MUSIC_URL_TTL_MS = 2 * 60 * 60 * 1000
+
+export const getMusicUrl = async(musicInfo: LX.Music.MusicInfo, type: LX.Quality): Promise<string> => {
+  const raw = await getData<string>(`${storageDataPrefix.musicUrl}${musicInfo.id}_${type}`)
+  if (!raw) return ''
+  try {
+    const parsed = JSON.parse(raw) as { url: string, time: number }
+    if (parsed?.url && Date.now() - (parsed.time ?? 0) < MUSIC_URL_TTL_MS) return parsed.url
+    return ''
+  } catch {
+    // 旧格式（无时间戳的裸链接）无法判断时效，按过期处理，触发重新解析
+    return ''
+  }
+}
+export const saveMusicUrl = async(musicInfo: LX.Music.MusicInfo, type: LX.Quality, url: string) => saveData(`${storageDataPrefix.musicUrl}${musicInfo.id}_${type}`, JSON.stringify({ url, time: Date.now() }))
 export const removeMusicUrl = async(musicInfo: LX.Music.MusicInfo, type: LX.Quality) => removeData(`${storageDataPrefix.musicUrl}${musicInfo.id}_${type}`)
 export const clearMusicUrl = async(keys?: string[]) => {
   if (!keys) keys = (await getAllKeys()).filter(key => key.startsWith(storageDataPrefix.musicUrl))

@@ -53,14 +53,15 @@ export const syncFavorites = async(): Promise<void> => {
     if (!listsEqual(currentLove, loveSongs)) {
       if (lastLocalWriteAt > syncStartedAt) return
       state.favoriteIds = new Set(loveSongs.map(s => s.id))
-      await overwriteListMusics(LIST_IDS.LOVE, loveSongs)
+      // 服务器同步覆盖：标记 isRemote，避免播放器把"当前歌被覆盖移除"误判为用户删歌而自动跳歌
+      await overwriteListMusics(LIST_IDS.LOVE, loveSongs, true)
     }
 
     const defaultSongs = defaultList.map(lxServerJsonToMusicInfo)
     const currentDefault = await getListMusics(LIST_IDS.DEFAULT)
     if (!listsEqual(currentDefault, defaultSongs)) {
       if (lastLocalWriteAt > syncStartedAt) return
-      await overwriteListMusics(LIST_IDS.DEFAULT, defaultSongs)
+      await overwriteListMusics(LIST_IDS.DEFAULT, defaultSongs, true)
     }
   } catch (err: any) {
     console.error('Failed to sync server lists:', err)
@@ -88,8 +89,8 @@ export const loadFavorites = async(): Promise<void> => {
 
     state.favoriteIds = new Set(songs.map(s => s.id))
 
-    // Update the love list in the store
-    await overwriteListMusics(LIST_IDS.LOVE, songs)
+    // Update the love list in the store（服务器拉取覆盖，标记 isRemote 防误跳歌）
+    await overwriteListMusics(LIST_IDS.LOVE, songs, true)
   } catch (err: any) {
     state.error = err.message ?? 'Failed to load favorites'
     console.error('Failed to load favorites:', err)

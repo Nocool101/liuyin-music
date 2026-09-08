@@ -7,12 +7,23 @@ import { updateListMusics } from '@/core/list'
 import settingState from '@/store/setting/state'
 import { subsonic } from '@/plugins/subsonic'
 import { lxApi } from '@/plugins/lxserver'
+import { liuyinNativeLog } from '@/plugins/player/liuyinPlayer'
 
 import {
   buildLyricInfo,
   getPlayQuality,
   getCachedLyricInfo,
 } from './utils'
+
+// 记录解析结果的 URL 形态（去掉 query，避免把认证参数写入日志）
+const logUrlShape = (url: string): string => {
+  try {
+    const u = new URL(url)
+    return `${u.protocol}//${u.host}${u.pathname}`
+  } catch {
+    return url.slice(0, 60)
+  }
+}
 
 // 音质降级链（照抄 Web 播放器 QUALITY_PRIORITY，从目标音质向下降级）
 const QUALITY_DEGRADE_CHAIN: LX.Quality[] = ['flac24bit', 'flac', '320k', '192k', '128k']
@@ -49,6 +60,8 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
   const cachedUrl = await getStoreMusicUrl(musicInfo, targetQuality)
   if (cachedUrl && !isRefresh) return cachedUrl
 
+  liuyinNativeLog(`resolve ${musicInfo.id} q=${targetQuality} refresh=${!!isRefresh} qualitys=${JSON.stringify(musicInfo.meta._qualitys)} setting=${settingState.setting['player.playQuality']}`)
+
   let lastError: any = null
   const filename = `${musicInfo.singer} - ${musicInfo.name}.mp3`
 
@@ -61,12 +74,14 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
     try {
       const result = await lxApi.getMusicUrl(musicInfo, q)
       const usableUrl = await probeResolvedUrl(result.url, filename)
+      liuyinNativeLog(`resolved ${musicInfo.id} q=${q} direct=${result.url === usableUrl ? 'direct' : 'proxy'} url=${logUrlShape(usableUrl ?? 'null')}${result.type ? ` type=${result.type}` : ''}${result.sourceName ? ` src=${result.sourceName}` : ''}`)
       if (usableUrl) {
         void saveMusicUrl(musicInfo, targetQuality, usableUrl)
         return usableUrl
       }
     } catch (err) {
       lastError = err
+      liuyinNativeLog(`resolve failed ${musicInfo.id} q=${q}: ${err?.message ?? err}`)
       console.log(`Internal API music URL failed for ${musicInfo.id} (${q}):`, err?.message ?? err)
     }
   }

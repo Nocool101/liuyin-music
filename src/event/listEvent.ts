@@ -32,10 +32,10 @@ const checkListExist = (changedIds: string[]) => {
   setActiveList(LIST_IDS.DEFAULT)
 }
 
-export const checkUpdateList = async(changedIds: string[]) => {
+export const checkUpdateList = async(changedIds: string[], isRemote: boolean = false) => {
   if (!changedIds.length) return
   await saveListMusics(changedIds.map(id => ({ id, musics: allMusicList.get(id) as LX.List.ListMusics })))
-  global.app_event.myListMusicUpdate(changedIds)
+  global.app_event.myListMusicUpdate(changedIds, isRemote)
 }
 
 
@@ -87,7 +87,7 @@ export class ListEvent extends Event {
     if (changedIds.includes(LIST_IDS.TEMP)) allListIds.push(LIST_IDS.TEMP)
     await saveListMusics([...allListIds.map(id => ({ id, musics: allMusicList.get(id) as LX.List.ListMusics }))])
 
-    global.app_event.myListMusicUpdate(changedIds)
+    global.app_event.myListMusicUpdate(changedIds, isRemote)
     this.emit('list_data_overwrite', listData, isRemote)
     checkListExist(changedIds)
   }
@@ -119,7 +119,7 @@ export class ListEvent extends Event {
     await updateUserList(userLists)
     await removeListMusics(ids)
     this.emit('list_remove', ids, isRemote)
-    global.app_event.myListMusicUpdate(changedIds)
+    global.app_event.myListMusicUpdate(changedIds, isRemote)
 
     checkListExist(changedIds)
   }
@@ -155,7 +155,7 @@ export class ListEvent extends Event {
    */
   async list_music_overwrite(listId: string, musicInfos: LX.Music.MusicInfo[], isRemote: boolean = false) {
     const changedIds = await listMusicOverwrite(listId, musicInfos)
-    await checkUpdateList(changedIds)
+    await checkUpdateList(changedIds, isRemote)
     this.emit('list_music_overwrite', listId, musicInfos, isRemote)
   }
 
@@ -168,7 +168,7 @@ export class ListEvent extends Event {
    */
   async list_music_add(listId: string, musicInfos: LX.Music.MusicInfo[], addMusicLocationType: LX.AddMusicLocationType, isRemote: boolean = false) {
     const changedIds = await listMusicAdd(listId, musicInfos, addMusicLocationType)
-    await checkUpdateList(changedIds)
+    await checkUpdateList(changedIds, isRemote)
     this.emit('list_music_add', listId, musicInfos, addMusicLocationType, isRemote)
   }
 
@@ -182,7 +182,7 @@ export class ListEvent extends Event {
    */
   async list_music_move(fromId: string, toId: string, musicInfos: LX.Music.MusicInfo[], addMusicLocationType: LX.AddMusicLocationType, isRemote: boolean = false) {
     const changedIds = await listMusicMove(fromId, toId, musicInfos, addMusicLocationType)
-    await checkUpdateList(changedIds)
+    await checkUpdateList(changedIds, isRemote)
     this.emit('list_music_move', fromId, toId, musicInfos, addMusicLocationType, isRemote)
   }
 
@@ -196,7 +196,7 @@ export class ListEvent extends Event {
   async list_music_remove(listId: string, ids: string[], isRemote: boolean = false) {
     const changedIds = await listMusicRemove(listId, ids)
     // console.log(changedIds)
-    await checkUpdateList(changedIds)
+    await checkUpdateList(changedIds, isRemote)
     this.emit('list_music_remove', listId, ids, isRemote)
   }
 
@@ -207,7 +207,7 @@ export class ListEvent extends Event {
    */
   async list_music_update(musicInfos: LX.List.ListActionMusicUpdate, isRemote: boolean = false) {
     const changedIds = await listMusicUpdateInfo(musicInfos)
-    await checkUpdateList(changedIds)
+    await checkUpdateList(changedIds, isRemote)
     this.emit('list_music_update', musicInfos, isRemote)
   }
 
@@ -218,7 +218,7 @@ export class ListEvent extends Event {
    */
   async list_music_clear(ids: string[], isRemote: boolean = false) {
     const changedIds = await listMusicClear(ids)
-    await checkUpdateList(changedIds)
+    await checkUpdateList(changedIds, isRemote)
     this.emit('list_music_clear', ids, isRemote)
   }
 
@@ -231,7 +231,7 @@ export class ListEvent extends Event {
    */
   async list_music_update_position(listId: string, position: number, ids: string[], isRemote: boolean = false) {
     const changedIds = await listMusicUpdatePosition(listId, position, ids)
-    await checkUpdateList(changedIds)
+    await checkUpdateList(changedIds, isRemote)
     this.emit('list_music_update_position', listId, position, ids, isRemote)
   }
 }

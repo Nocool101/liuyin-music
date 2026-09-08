@@ -114,6 +114,20 @@ public final class PlayerCache {
         return contentLength > 0 && current.isCached(key, 0, contentLength);
     }
 
+    /** 按播放链接移除单个缓存条目（用于丢弃被截断/损坏的缓存内容） */
+    public synchronized boolean remove(String key) {
+        if (key == null || key.isEmpty()) return false;
+        try {
+            SimpleCache current = getCache();
+            if (!current.getKeys().contains(key)) return false;
+            current.removeResource(key);
+            return true;
+        } catch (Throwable t) {
+            android.util.Log.w("LiuyinPlayer", "remove cache key failed", t);
+            return false;
+        }
+    }
+
     public synchronized void clear() {
         SimpleCache current = getCache();
         List<String> keys = new ArrayList<>(current.getKeys());

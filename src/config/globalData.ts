@@ -56,6 +56,8 @@ global.lx = {
 
   playerTrackId: '',
 
+  playerPlayUrl: '',
+
   gettingUrlId: '',
 
   qualityList: {},
