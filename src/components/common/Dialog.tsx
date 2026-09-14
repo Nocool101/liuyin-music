@@ -64,6 +64,9 @@ export interface DialogProps {
   title?: string
   children: React.ReactNode | React.ReactNode[]
   height?: number | `${number}%`
+  width?: number | `${number}%`
+  maxWidth?: number | `${number}%`
+  maxHeight?: number | `${number}%`
 }
 
 export interface DialogType {
@@ -78,6 +81,9 @@ export default forwardRef<DialogType, DialogProps>(({
   title = '',
   children,
   height,
+  width,
+  maxWidth,
+  maxHeight,
 }: DialogProps, ref) => {
   const theme = useTheme()
   const { keyboardShown, keyboardHeight } = useKeyboard()
@@ -100,7 +106,18 @@ export default forwardRef<DialogType, DialogProps>(({
   return (
     <Modal onHide={onHide} keyHide={keyHide} bgHide={bgHide} bgColor="rgba(50,50,50,.3)" ref={modalRef}>
       <View style={{ ...styles.centeredView, paddingBottom: keyboardShown ? keyboardHeight : 0 }}>
-        <View style={{ ...styles.modalView, height, backgroundColor: theme['c-content-background'] }} onStartShouldSetResponder={() => true}>
+        <View
+          style={{
+            ...styles.modalView,
+            height,
+            width,
+            minWidth: width ? undefined : styles.modalView.minWidth,
+            maxWidth: maxWidth ?? (width ? '95%' : styles.modalView.maxWidth),
+            maxHeight: maxHeight ?? styles.modalView.maxHeight,
+            backgroundColor: theme['c-content-background'],
+          }}
+          onStartShouldSetResponder={() => true}
+        >
           <View style={{ ...styles.header, backgroundColor: theme['c-primary-light-100-alpha-100'] }}>
             <Text style={styles.title} size={13} color={theme['c-primary-light-1000']} numberOfLines={1}>{title}</Text>
             {closeBtnComponent}

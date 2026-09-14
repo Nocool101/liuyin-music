@@ -23,6 +23,7 @@ export interface ListMenuProps {
   onChangePosition: (selectInfo: SelectInfo) => void
   onToggleSource: (selectInfo: SelectInfo) => void
   onMusicSourceDetail: (selectInfo: SelectInfo) => void
+  onDownload: (selectInfo: SelectInfo) => void
   onDislikeMusic: (selectInfo: SelectInfo) => void
   onRemove: (selectInfo: SelectInfo) => void
 }
@@ -64,7 +65,7 @@ export default forwardRef<ListMenuType, ListMenuProps>((props, ref) => {
     const menu = [
       { action: 'play', label: t('play') },
       { action: 'playLater', label: t('play_later') },
-      // { action: 'download', label: '下载' },
+      { action: 'download', disabled: musicInfo.source == 'local', label: t('download') },
       { action: 'add', label: t('add_to') },
       { action: 'move', label: t('move_to') },
       { action: 'changePosition', label: t('change_position') },
@@ -115,6 +116,9 @@ export default forwardRef<ListMenuType, ListMenuProps>((props, ref) => {
         // selectedListRef.current.length
         //   ? setVisibleMusicMultiAddModal(true)
         //   : setVisibleMusicAddModal(true)
+        break
+      case 'download':
+        props.onDownload(selectInfo)
         break
       case 'editMetadata':
         props.onEditMetadata(selectInfo)

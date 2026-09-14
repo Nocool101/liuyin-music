@@ -2,7 +2,7 @@
 import { useImperativeHandle, forwardRef, useState, useMemo } from 'react'
 import { Modal, TouchableWithoutFeedback, View, type ModalProps as _ModalProps } from 'react-native'
 import { useStatusbarHeight } from '@/store/common/hook'
-// import { useWindowSize } from '@/utils/hooks'
+import StatusBar from './StatusBar'
 
 // const styles = createStyle({
 //   container: {
@@ -89,8 +89,7 @@ export default forwardRef<ModalType, ModalProps>(({
       onRequestClose={handleRequestClose}
       {...props}
     >
-      {/* <StatusBar /> */}
-      {/* <View style={{ flex: 1, paddingTop: statusBarPadding ? StatusBar.currentHeight : 0 }}> */}
+      <StatusBar />
       <TouchableWithoutFeedback style={{ flex: 1, paddingTop: statusBarPadding ? statusBarHeight : 0 }} onPress={handleBgClose}>
         <View style={{ flex: 1, backgroundColor: bgColor }}>
           {memoChildren}

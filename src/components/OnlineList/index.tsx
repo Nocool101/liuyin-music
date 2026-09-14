@@ -5,8 +5,10 @@ import List, { type ListProps, type ListType, type Status, type RowInfoType } fr
 import ListMenu, { type ListMenuType, type Position, type SelectInfo } from './ListMenu'
 import ListMusicMultiAdd, { type MusicMultiAddModalType as ListAddMultiType } from '@/components/MusicMultiAddModal'
 import ListMusicAdd, { type MusicAddModalType as ListMusicAddType } from '@/components/MusicAddModal'
+import DownloadMusicModal, { type DownloadMusicModalType } from '@/components/DownloadMusicModal'
 import MultipleModeBar, { type MultipleModeBarType, type SelectMode } from './MultipleModeBar'
-import { handleDislikeMusic, handlePlay, handlePlayLater, handleShare, handleShowMusicSourceDetail } from './listAction'
+import { handleDislikeMusic, handlePlay, handlePlayLater, handleShare } from './listAction'
+import LyricCardShareModal, { type LyricCardShareModalType } from '@/components/LyricCardShareModal'
 import { createStyle } from '@/utils/tools'
 
 export interface OnlineListProps {
@@ -37,6 +39,8 @@ export default forwardRef<OnlineListType, OnlineListProps>(({
   const listMusicAddRef = useRef<ListMusicAddType>(null)
   const listMusicMultiAddRef = useRef<ListAddMultiType>(null)
   const listMenuRef = useRef<ListMenuType>(null)
+  const downloadMusicModalRef = useRef<DownloadMusicModalType>(null)
+  const lyricCardShareModalRef = useRef<LyricCardShareModalType>(null)
   // const loadingMaskRef = useRef<LoadingMaskType>(null)
 
   useImperativeHandle(ref, () => ({
@@ -109,9 +113,12 @@ export default forwardRef<OnlineListType, OnlineListProps>(({
         onPlayLater={info => { hancelExitSelect(); handlePlayLater(info.musicInfo, info.selectedList, hancelExitSelect) }}
         onCopyName={info => { handleShare(info.musicInfo) }}
         onAdd={handleAddMusic}
-        onMusicSourceDetail={info => { void handleShowMusicSourceDetail(info.musicInfo) }}
+        onMusicSourceDetail={info => lyricCardShareModalRef.current?.show(info.musicInfo)}
+        onDownload={info => downloadMusicModalRef.current?.show({ musicInfo: info.musicInfo, selectedList: info.selectedList })}
         onDislikeMusic={info => { void handleDislikeMusic(info.musicInfo) }}
       />
+      <DownloadMusicModal ref={downloadMusicModalRef} />
+      <LyricCardShareModal ref={lyricCardShareModalRef} />
       {/* <LoadingMask ref={loadingMaskRef} /> */}
     </View>
   )

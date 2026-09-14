@@ -11,7 +11,10 @@ import java.util.List;
 public class UtilsPackage implements ReactPackage {
   @Override
   public List<NativeModule> createNativeModules(ReactApplicationContext reactContext) {
-    return Collections.<NativeModule>singletonList(new UtilsModule(reactContext));
+    List<NativeModule> modules = new java.util.ArrayList<>();
+    modules.add(new UtilsModule(reactContext));
+    modules.add(new LyricCardModule(reactContext));
+    return modules;
   }
 
   @Override

@@ -13,6 +13,7 @@ import {
   liuyinGetCacheSize,
   liuyinIsCached,
   liuyinClearCache,
+  liuyinRemoveCache,
   liuyinSetVolume,
   liuyinStop,
 } from './liuyinPlayer'

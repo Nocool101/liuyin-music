@@ -10,8 +10,26 @@ const sources = {
   ],
 }
 
+const getMusicDetailPageUrl = (id) => (songInfo) => {
+  switch (id) {
+    case 'kw':
+      return `http://www.kuwo.cn/play_detail/${songInfo.songmid}`
+    case 'kg':
+      return `https://www.kugou.com/song/#hash=${songInfo.hash}&album_id=${songInfo.albumId}`
+    case 'tx':
+      return `https://y.qq.com/n/yqq/song/${songInfo.songmid}.html`
+    case 'wy':
+      return `https://music.163.com/#/song?id=${songInfo.songmid}`
+    case 'mg':
+      return `http://music.migu.cn/v3/music/song/${songInfo.copyrightId}`
+    default:
+      return ''
+  }
+}
+
 const createSource = (id) => ({
   id,
+  getMusicDetailPageUrl: getMusicDetailPageUrl(id),
   musicSearch: {
     search: async(text, page = 1, limit = 30) => {
       const result = await lxApi.search(id, text, 'song', page, limit)

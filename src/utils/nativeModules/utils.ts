@@ -1,6 +1,7 @@
 import { BackHandler, Dimensions, NativeEventEmitter, NativeModules } from 'react-native'
 
 const UtilsModule = NativeModules.UtilsModule || null
+const LyricCardModule = NativeModules.LyricCardModule || null
 
 export const exitApp = () => {
   BackHandler.exitApp()
@@ -70,6 +71,22 @@ export const requestNotificationPermission = async(): Promise<boolean> => {
 
 export const shareText = async(shareTitle: string, title: string, text: string): Promise<void> => {
   if (UtilsModule && UtilsModule.shareText) UtilsModule.shareText(shareTitle, title, text)
+}
+
+export const renderLyricCard = async(options: {
+  title: string
+  artist: string
+  lyricLines: Array<{ text: string, active: boolean }>
+  coverPath: string | null
+  layout: 'portrait' | 'landscape' | 'square'
+  colorTheme: 'dark' | 'light' | 'album'
+}): Promise<string> => {
+  if (!LyricCardModule || !LyricCardModule.renderLyricCard) throw new Error('LyricCardModule not available')
+  return LyricCardModule.renderLyricCard(options)
+}
+
+export const shareImage = async(filePath: string, title: string): Promise<void> => {
+  if (UtilsModule && UtilsModule.shareImage) UtilsModule.shareImage(filePath, title)
 }
 
 export const getSystemLocales = async(): Promise<string> => {

@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react'
 
 import listState from '@/store/list/state'
 import ListMenu, { type ListMenuType, type Position, type SelectInfo } from './ListMenu'
-import { handleDislikeMusic, handlePlayLater, handleRemove, handleShare, handleShowMusicSourceDetail, handleUpdateMusicInfo, handleUpdateMusicPosition } from './listAction'
+import { handleDislikeMusic, handlePlayLater, handleRemove, handleShare, handleUpdateMusicInfo, handleUpdateMusicPosition } from './listAction'
 import { playListById } from '@/core/player/player'
 import List, { type ListType } from './List'
 import ListMusicAdd, { type MusicAddModalType as ListMusicAddType } from '@/components/MusicAddModal'
@@ -16,6 +16,8 @@ import ListMusicSearch, { type ListMusicSearchType } from './ListMusicSearch'
 import MusicPositionModal, { type MusicPositionModalType } from './MusicPositionModal'
 import MetadataEditModal, { type MetadataEditType, type MetadataEditProps } from '@/components/MetadataEditModal'
 import MusicToggleModal, { type MusicToggleModalType } from './MusicToggleModal'
+import DownloadMusicModal, { type DownloadMusicModalType } from '@/components/DownloadMusicModal'
+import LyricCardShareModal, { type LyricCardShareModalType } from '@/components/LyricCardShareModal'
 
 
 export default () => {
@@ -31,6 +33,8 @@ export default () => {
   const metadataEditTypeRef = useRef<MetadataEditType>(null)
   const listMenuRef = useRef<ListMenuType>(null)
   const musicToggleModalRef = useRef<MusicToggleModalType>(null)
+  const downloadMusicModalRef = useRef<DownloadMusicModalType>(null)
+  const lyricCardShareModalRef = useRef<LyricCardShareModalType>(null)
   const layoutHeightRef = useRef<number>(0)
   const isShowMultipleModeBar = useRef(false)
   const isShowSearchBarModeBar = useRef(false)
@@ -159,18 +163,21 @@ export default () => {
         onRemove={info => { hancelExitSelect(); handleRemove(info.listId, info.musicInfo, info.selectedList, hancelExitSelect) }}
         onDislikeMusic={info => { void handleDislikeMusic(info.musicInfo) }}
         onCopyName={info => { handleShare(info.musicInfo) }}
-        onMusicSourceDetail={info => { void handleShowMusicSourceDetail(info.musicInfo) }}
+        onMusicSourceDetail={info => lyricCardShareModalRef.current?.show(info.musicInfo as LX.Music.MusicInfoOnline)}
         onAdd={handleAddMusic}
         onMove={handleMoveMusic}
         onEditMetadata={handleEditMetadata}
         onChangePosition={info => musicPositionModalRef.current?.show(info)}
         onToggleSource={info => musicToggleModalRef.current?.show(info)}
+        onDownload={info => downloadMusicModalRef.current?.show({ musicInfo: info.musicInfo as LX.Music.MusicInfoOnline, selectedList: info.selectedList as LX.Music.MusicInfoOnline[] })}
       />
       <MetadataEditModal
         ref={metadataEditTypeRef}
         onUpdate={handleUpdateMetadata}
       />
       <MusicToggleModal ref={musicToggleModalRef} />
+      <DownloadMusicModal ref={downloadMusicModalRef} />
+      <LyricCardShareModal ref={lyricCardShareModalRef} />
     </View>
   )
 }

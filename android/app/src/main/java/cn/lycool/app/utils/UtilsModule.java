@@ -162,7 +162,45 @@ public class UtilsModule extends ReactContextBaseJavaModule {
 
   @ReactMethod
   public void shareText(String shareTitle, String title, String text) {
-    // Not supported
+    Activity activity = getCurrentActivity();
+    if (activity == null) return;
+    activity.runOnUiThread(() -> {
+      try {
+        Intent sendIntent = new Intent();
+        sendIntent.setAction(Intent.ACTION_SEND);
+        sendIntent.putExtra(Intent.EXTRA_TEXT, text);
+        sendIntent.putExtra(Intent.EXTRA_TITLE, title);
+        sendIntent.putExtra(Intent.EXTRA_SUBJECT, shareTitle);
+        sendIntent.setType("text/plain");
+        Intent chooser = Intent.createChooser(sendIntent, title);
+        activity.startActivity(chooser);
+      } catch (Exception e) {
+        // ignored
+      }
+    });
+  }
+
+  @ReactMethod
+  public void shareImage(String filePath, String title) {
+    Activity activity = getCurrentActivity();
+    if (activity == null) return;
+    try {
+      java.io.File file = new java.io.File(filePath);
+      if (!file.exists()) return;
+      android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
+        getReactApplicationContext(), getReactApplicationContext().getPackageName() + ".provider", file);
+      Intent sendIntent = new Intent();
+      sendIntent.setAction(Intent.ACTION_SEND);
+      sendIntent.setType("image/png");
+      sendIntent.putExtra(Intent.EXTRA_STREAM, uri);
+      sendIntent.putExtra(Intent.EXTRA_TITLE, title);
+      sendIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+      activity.runOnUiThread(() -> {
+        try {
+          activity.startActivity(Intent.createChooser(sendIntent, title));
+        } catch (Exception ignored) {}
+      });
+    } catch (Exception ignored) {}
   }
 
   @ReactMethod
