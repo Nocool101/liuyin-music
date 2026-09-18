@@ -1,9 +1,10 @@
 import { memo, useCallback, useRef, useEffect } from 'react'
-import { type LayoutChangeEvent, StyleSheet, View, StatusBar, Dimensions } from 'react-native'
+import { type LayoutChangeEvent, StyleSheet, View, StatusBar, Dimensions, AppState } from 'react-native'
 import commonState from '@/store/common/state'
 import settingState from '@/store/setting/state'
-import { setStatusbarHeight } from '@/core/common'
+import { setStatusbarHeight, setNavBarHeight } from '@/core/common'
 import { windowSizeTools, getWindowSize } from '@/utils/windowSizeTools'
+import { getSystemInsets } from '@/utils/nativeModules/utils'
 
 import { isHorizontalMode } from '@/utils/tools'
 
@@ -37,11 +38,25 @@ export default memo(() => {
       if (currentSize.width != layout.width || currentSize.height != layout.height) {
         windowSizeTools.setWindowSize(layout.width, layout.height)
       }
+      void getSystemInsets().then(insets => {
+        setNavBarHeight(Math.round(insets.bottom))
+      })
     })
   }, [])
   useEffect(() => {
     const subscription = Dimensions.addEventListener('change', () => {
       dimensionsChangedRef.current = true
+    })
+
+    const updateInsets = () => {
+      void getSystemInsets().then(insets => {
+        setNavBarHeight(Math.round(insets.bottom))
+      })
+    }
+    updateInsets()
+    const timer = setTimeout(updateInsets, 500)
+    const appStateSub = AppState.addEventListener('change', state => {
+      if (state == 'active') updateInsets()
     })
 
     const handleSettingUpdate = (keys: Array<keyof LX.AppSetting>) => {
@@ -58,6 +73,8 @@ export default memo(() => {
 
     return () => {
       subscription.remove()
+      clearTimeout(timer)
+      appStateSub.remove()
       global.state_event.off('configUpdated', handleSettingUpdate)
     }
   }, [])

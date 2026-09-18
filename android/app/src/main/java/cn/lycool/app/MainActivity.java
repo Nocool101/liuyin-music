@@ -15,17 +15,21 @@ public class MainActivity extends NavigationActivity {
 
   private void applySystemUi() {
     View decor = getWindow().getDecorView();
+    if (decor == null) return;
     boolean landscape = getResources().getConfiguration().orientation
         == Configuration.ORIENTATION_LANDSCAPE;
     try {
       WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
       WindowInsetsControllerCompat c = WindowCompat.getInsetsController(getWindow(), decor);
-      if (landscape) {
-        c.setSystemBarsBehavior(
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-        c.hide(WindowInsetsCompat.Type.statusBars());
-      } else {
-        c.show(WindowInsetsCompat.Type.statusBars());
+      if (c != null) {
+        if (landscape) {
+          c.setSystemBarsBehavior(
+              WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+          c.hide(WindowInsetsCompat.Type.statusBars());
+        } else {
+          c.show(WindowInsetsCompat.Type.statusBars());
+          c.show(WindowInsetsCompat.Type.navigationBars());
+        }
       }
     } catch (Throwable ignored) {
     }

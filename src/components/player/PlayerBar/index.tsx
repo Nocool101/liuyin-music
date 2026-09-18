@@ -10,6 +10,7 @@ import { createStyle } from '@/utils/tools'
 // import { useSettingValue } from '@/store/setting/hook'
 import { useTheme } from '@/store/theme/hook'
 import { useSettingValue } from '@/store/setting/hook'
+import { useNavBarHeight } from '@/store/common/hook'
 
 
 export default memo(({ isHome = false }: { isHome?: boolean }) => {
@@ -17,9 +18,10 @@ export default memo(({ isHome = false }: { isHome?: boolean }) => {
   const { keyboardShown } = useKeyboard()
   const theme = useTheme()
   const autoHidePlayBar = useSettingValue('common.autoHidePlayBar')
+  const navBarHeight = useNavBarHeight()
 
   const playerComponent = useMemo(() => (
-    <View style={{ ...styles.container, backgroundColor: theme['c-content-background'] }}>
+    <View style={{ ...styles.container, paddingBottom: 5 + navBarHeight, backgroundColor: theme['c-content-background'] }}>
       <Pic isHome={isHome} />
       <View style={styles.center}>
         <Title isHome={isHome} />
@@ -32,7 +34,7 @@ export default memo(({ isHome = false }: { isHome?: boolean }) => {
         <ControlBtn />
       </View>
     </View>
-  ), [theme, isHome])
+  ), [theme, isHome, navBarHeight])
 
   // console.log('render pb')
 

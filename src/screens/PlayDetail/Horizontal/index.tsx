@@ -16,11 +16,12 @@ import Lyric from './Lyric'
 import Player from './Player'
 import { createStyle } from '@/utils/tools'
 import { marginLeftRaw } from './constant'
-import { useStatusbarHeight } from '@/store/common/hook'
+import { useNavBarHeight, useStatusbarHeight } from '@/store/common/hook'
 // import MoreBtn from './MoreBtn2'
 
 export default memo(({ componentId }: { componentId: string }) => {
   const statusBarHeight = useStatusbarHeight()
+  const navBarHeight = useNavBarHeight()
 
   useEffect(() => {
     setComponentId(COMPONENT_IDS.playDetail, componentId)
@@ -55,7 +56,7 @@ export default memo(({ componentId }: { componentId: string }) => {
     <PageContent>
       <StatusBar />
       <View style={{ ...styles.container, paddingTop: statusBarHeight }}>
-        <View style={styles.left}>
+        <View style={{ ...styles.left, paddingBottom: Math.max(10, 10 + navBarHeight) }}>
           <Header />
           <View style={styles.leftContent}>
             <MoreBtn />

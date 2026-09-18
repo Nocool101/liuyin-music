@@ -38,5 +38,5 @@ if (process.env.NODE_ENV !== 'development') {
   setNativeExceptionHandler((errorString) => {
     log.error(errorString)
     console.log('+++++', errorString, '+++++')
-  }, false)
+  }, false, true)
 }

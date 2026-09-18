@@ -102,12 +102,12 @@ public class MainApplication extends NavigationApplication {
   public void onCreate() {
     super.onCreate();
 
+    final Thread.UncaughtExceptionHandler defaultHandler = Thread.getDefaultUncaughtExceptionHandler();
     Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
       @Override
       public void uncaughtException(Thread thread, Throwable t) {
         writeCrashLog(t);
         // fall back to default handler
-        Thread.UncaughtExceptionHandler defaultHandler = Thread.getDefaultUncaughtExceptionHandler();
         if (defaultHandler != null && defaultHandler != this) {
           defaultHandler.uncaughtException(thread, t);
         } else {

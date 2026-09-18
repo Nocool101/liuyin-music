@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { Image, ScrollView, TouchableOpacity, View } from 'react-native'
-import { useNavActiveId, useStatusbarHeight } from '@/store/common/hook'
+import { useNavActiveId, useNavBarHeight, useStatusbarHeight } from '@/store/common/hook'
 import { useTheme } from '@/store/theme/hook'
 import { Icon } from '@/components/common/Icon'
 import { confirmDialog, createStyle, exitApp as backHome } from '@/utils/tools'
@@ -130,8 +130,10 @@ export default memo(() => {
     setNavActiveId(id)
   }
 
+  const navBarHeight = useNavBarHeight()
+
   return (
-    <View style={{ ...styles.container, borderRightColor: theme['c-border-background'] }}>
+    <View style={{ ...styles.container, paddingBottom: 10 + navBarHeight, borderRightColor: theme['c-border-background'] }}>
       <Header />
       <ScrollView style={styles.menus}>
         <View style={styles.list}>

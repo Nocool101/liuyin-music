@@ -41,18 +41,25 @@ public final class PlayerCache {
 
     public synchronized SimpleCache getCache() {
         if (cache == null) {
-            File cacheDir = new File(appContext.getFilesDir(), "TrackPlayer");
-            cache = new SimpleCache(
-                    cacheDir,
-                    new LeastRecentlyUsedCacheEvictor(maxBytes),
-                    new StandaloneDatabaseProvider(appContext));
+            try {
+                File cacheDir = new File(appContext.getFilesDir(), "TrackPlayer");
+                cache = new SimpleCache(
+                        cacheDir,
+                        new LeastRecentlyUsedCacheEvictor(maxBytes),
+                        new StandaloneDatabaseProvider(appContext));
+            } catch (Throwable t) {
+                android.util.Log.e("PlayerCache", "SimpleCache initialization failed", t);
+                cache = null;
+            }
         }
         return cache;
     }
 
     public synchronized DataSource.Factory getDataSourceFactory(DataSource.Factory upstream) {
+        SimpleCache sc = getCache();
+        if (sc == null) return upstream;
         return new CacheDataSource.Factory()
-                .setCache(getCache())
+                .setCache(sc)
                 .setUpstreamDataSourceFactory(upstream)
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
     }
@@ -108,30 +115,29 @@ public final class PlayerCache {
     }
 
     public synchronized boolean isCached(String key) {
-        Cache current = getCache();
-        long contentLength = current.getContentMetadata(key).get(
-                androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L);
-        return contentLength > 0 && current.isCached(key, 0, contentLength);
-    }
-
-    /** 按播放链接移除单个缓存条目（用于丢弃被截断/损坏的缓存内容） */
-    public synchronized boolean remove(String key) {
-        if (key == null || key.isEmpty()) return false;
         try {
-            SimpleCache current = getCache();
-            if (!current.getKeys().contains(key)) return false;
-            current.removeResource(key);
-            return true;
+            Cache current = getCache();
+            if (current == null) return false;
+            long contentLength = current.getContentMetadata(key).get(
+                    androidx.media3.datasource.cache.ContentMetadata.KEY_CONTENT_LENGTH, -1L);
+            return contentLength > 0 && current.isCached(key, 0, contentLength);
         } catch (Throwable t) {
-            android.util.Log.w("LiuyinPlayer", "remove cache key failed", t);
             return false;
         }
     }
 
     public synchronized void clear() {
-        SimpleCache current = getCache();
-        List<String> keys = new ArrayList<>(current.getKeys());
-        for (String key : keys) current.removeResource(key);
+        try {
+            SimpleCache current = getCache();
+            if (current != null) {
+                List<String> keys = new ArrayList<>(current.getKeys());
+                for (String key : keys) {
+                    try {
+                        current.removeResource(key);
+                    } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {}
         clearFrescoCache();
         deleteRecursively(new File(appContext.getCacheDir(), "TrackPlayer"));
     }

@@ -7,7 +7,7 @@ import { useKeyboard } from '@/utils/hooks'
 import { createStyle } from '@/utils/tools'
 import { useTheme } from '@/store/theme/hook'
 import Text from './Text'
-import { useStatusbarHeight } from '@/store/common/hook'
+import { useNavBarHeight, useStatusbarHeight } from '@/store/common/hook'
 
 const styles = createStyle({
   centeredView: {
@@ -73,6 +73,7 @@ export default forwardRef<PopupType, PopupProps>(({
   const theme = useTheme()
   const { keyboardShown, keyboardHeight } = useKeyboard()
   const statusBarHeight = useStatusbarHeight()
+  const navBarHeight = useNavBarHeight()
 
   const modalRef = useRef<ModalType>(null)
 
@@ -170,7 +171,7 @@ export default forwardRef<PopupType, PopupProps>(({
 
   return (
     <Modal onHide={onHide} keyHide={keyHide} bgHide={bgHide} bgColor="rgba(50,50,50,.2)" ref={modalRef}>
-      <View style={{ ...styles.centeredView, ...centeredViewStyle, paddingBottom: keyboardShown ? keyboardHeight : 0 }}>
+      <View style={{ ...styles.centeredView, ...centeredViewStyle, paddingBottom: keyboardShown ? keyboardHeight : (position == 'bottom' || !position ? navBarHeight : 0) }}>
         <View style={{ ...styles.modalView, ...modalViewStyle, backgroundColor: theme['c-content-background'] }} onStartShouldSetResponder={() => true}>
           <View style={styles.header}>
             <Text size={13} style={styles.title} numberOfLines={1}>{title}</Text>
