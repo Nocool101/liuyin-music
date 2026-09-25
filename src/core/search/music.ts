@@ -1,5 +1,5 @@
 import searchMusicState, { type Source } from '@/store/search/music/state'
-import searchMusicActions, { type SearchResult } from '@/store/search/music/action'
+import searchMusicActions from '@/store/search/music/action'
 import { lxApi } from '@/plugins/lxserver'
 import { LIST_IDS } from '@/config/constant'
 import { getListMusicSync } from '@/utils/listManage'
@@ -14,7 +14,7 @@ export const setListInfo: typeof searchMusicActions.setListInfo = (result, id, p
   return searchMusicActions.setListInfo(result, id, page)
 }
 
-export const clearListInfo: typeof searchMusicActions.clearListInfo = (source) => {
+export const clearListInfo: typeof searchMusicActions['clearListInfo'] = (source) => {
   searchMusicActions.clearListInfo(source)
 }
 
@@ -50,7 +50,7 @@ const toMusicInfo = (item: any, sourceId: LX.OnlineSource): LX.Music.MusicInfoOn
   } as unknown as LX.Music.MusicInfoOnline
 }
 
-// 聚合搜索（"聚合大会"）：客户端并行请求各音源，避免服务端聚合接口被最慢音源拖住。
+// 聚合搜索由客户端并行请求各音源，避免服务端聚合接口被最慢音源拖住。
 // 每源限时，结果渐进回调（onPartial）——先到的先展示，慢源/坏源超时丢弃，不拖整体。
 const AGG_SOURCES: Source[] = ['kw', 'wy', 'mg', 'kg', 'tx']
 const AGG_PER_SOURCE_LIMIT = 15
@@ -100,11 +100,15 @@ const searchAggregate = async(
     }
   }))
 
-  // 任一音源返回满页说明还有下一页，允许继续加载更多
   return { songs: merged, hasMore: sourceLists.some(items => items.length >= AGG_PER_SOURCE_LIMIT) }
 }
 
-export const search = async(text: string, page: number, sourceId: Source, onPartial?: (songs: LX.Music.MusicInfoOnline[]) => void): Promise<LX.Music.MusicInfoOnline[]> => {
+export const search = async(
+  text: string,
+  page: number,
+  sourceId: Source,
+  onPartial?: (songs: LX.Music.MusicInfoOnline[]) => void,
+): Promise<LX.Music.MusicInfoOnline[]> => {
   const listInfo = searchMusicState.listInfos[sourceId]!
   if (!text) return []
   const key = `${page}__${text}`
@@ -112,12 +116,15 @@ export const search = async(text: string, page: number, sourceId: Source, onPart
   if (sourceId == 'all') {
     listInfo.key = key
     try {
-      const { songs, hasMore } = await searchAggregate(text, page, onPartial)
+      const { songs, hasMore } = await searchAggregate(text, page, partialSongs => {
+        // 旧请求的慢源结果不能覆盖用户刚切换的新关键词/音源。
+        if (listInfo.key == key) onPartial?.(partialSongs)
+      })
 
       if (key != listInfo.key) return []
       setSearchText(text)
       setSource(sourceId)
-      return setListInfo({ list: songs, total: songs.length, limit: 30, page, source: 'all', allPage: hasMore ? page + 1 : page }, page, text)
+      return setListInfo({ list: songs, total: songs.length, limit: 30, source: 'all' as LX.OnlineSource, allPage: hasMore ? page + 1 : page }, page, text)
     } catch (error: any) {
       console.log(error)
       return []
@@ -127,12 +134,11 @@ export const search = async(text: string, page: number, sourceId: Source, onPart
     listInfo.key = key
 
     try {
-      // Use internal API for specific source search
       const result = await lxApi.search(sourceId, text, 'song', page, listInfo.limit)
       const songs = result.list.map((item: any) => toMusicInfo(item, sourceId as LX.OnlineSource))
 
       if (key != listInfo.key) return []
-      return setListInfo({ list: songs, total: result.total, limit: result.limit, page, source: sourceId, allPage: Math.ceil(result.total / (result.limit || 1)) || 1 }, page, text)
+      return setListInfo({ list: songs, total: result.total, limit: result.limit, source: sourceId, allPage: Math.ceil(result.total / (result.limit || 1)) || 1 }, page, text)
     } catch (err: any) {
       if (listInfo.list.length && page == 1) clearListInfo(sourceId)
       throw err

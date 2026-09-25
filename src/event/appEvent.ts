@@ -149,7 +149,7 @@ export class AppEvent extends Event {
     this.emit('lyricOffsetUpdate')
   }
 
-  // 我的列表内歌曲改变事件（isRemote：是否由服务器同步等远程操作触发）
+  // 我的列表内歌曲改变事件（isRemote 表示服务器同步等远程变更）
   myListMusicUpdate(ids: string[], isRemote: boolean = false) {
     if (!ids.length) return
     this.emit('myListMusicUpdate', ids, isRemote)

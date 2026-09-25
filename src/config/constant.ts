@@ -25,8 +25,6 @@ export enum COMPONENT_IDS {
   playDetail = 'playDetail',
   songlistDetail = 'songlistDetail',
   comment = 'comment',
-  serverList = 'serverList',
-  serverEdit = 'serverEdit',
 }
 
 export enum NAV_SHEAR_NATIVE_IDS {
@@ -49,15 +47,14 @@ export const storageDataPrefix = {
   listPrevSelectId: '@list_prev_select_id',
 
   lyric: '@lyric__',
-  musicUrl: '@music_url__',
+  // 更换缓存前缀，使旧版探测失败后缓存的无效链接全部作废。
+  musicUrl: '@music_url_v2__',
   musicOtherSource: '@music_other_source__',
   playInfo: '@play_info',
 
   syncAuthKey: '@sync_auth_key',
   syncHost: '@sync_host',
   syncHostHistory: '@sync_host_history',
-
-  firstLaunchPermissionsDone: '@first_launch_permissions_done',
 
   openStoragePath: '@open_storage_path',
   selectedManagedFolder: '@selected_managed_folder',

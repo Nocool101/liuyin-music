@@ -15,9 +15,6 @@ import androidx.media3.session.MediaSession;
 import androidx.media3.session.SessionCommands;
 import androidx.media3.session.MediaSessionService;
 
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
-
 import cn.lycool.app.MainActivity;
 import cn.lycool.app.player.LiuyinPlayer;
 
@@ -30,14 +27,13 @@ import cn.lycool.app.player.LiuyinPlayer;
 public class LiuyinMediaService extends MediaSessionService {
 
     private static final String CHANNEL_ID = "liuyin_media";
+    private static final long TASK_REMOVED_LABEL_REMOVE_DELAY_MS = 800L;
+    private static final long TASK_REMOVED_LABEL_REMOVE_RETRY_MS = 5_000L;
 
     private MediaSession mediaSession;
     private static LiuyinMediaService instance;
-
-    /** 划掉任务后延时摘除媒体标签：等待 Media3 处理完暂停事件的通知更新，避免刚摘又被发布 */
-    private static final long TASK_REMOVED_LABEL_REMOVE_DELAY_MS = 800L;
-    private static final long TASK_REMOVED_LABEL_REMOVE_RETRY_MS = 5000L;
-    private Handler mainHandler;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private volatile boolean taskRemovedSuppressed;
 
     public static LiuyinMediaService getInstance() {
         return instance;
@@ -46,13 +42,11 @@ public class LiuyinMediaService extends MediaSessionService {
     @Override
     public void onCreate() {
         super.onCreate();
-        MediaLog.log(this, "media service onCreate (created=true)");
         instance = this;
         createNotificationChannel();
 
         // 绑定真实播放器（单例，与 JS 共享同一 ExoPlayer 实例）
         LiuyinPlayer liuyinPlayer = LiuyinPlayer.getInstance(getApplicationContext());
-        mainHandler = new Handler(Looper.getMainLooper());
 
         Intent intent = new Intent(this, MainActivity.class);
         PendingIntent pi = TaskStackBuilder.create(this)
@@ -145,37 +139,7 @@ public class LiuyinMediaService extends MediaSessionService {
 
                     @Override
                     public int onPlayerCommandRequest(MediaSession session, MediaSession.ControllerInfo controller, int playerCommand) {
-                        boolean jsAlive = MediaBridgeModule.hasContext();
                         android.util.Log.i("LiuyinMedia", "playerCommand=" + playerCommand);
-                        MediaLog.log(LiuyinMediaService.this, "player command=" + playerCommand + " jsAlive=" + jsAlive);
-                        // JS 未运行（应用未打开、进程刚由媒体按键拉起）：
-                        // 播放类按键直接原生恢复/暂停上次曲目，实现"不开 app 也能耳机双击播放"
-                        if (!jsAlive) {
-                            String coldCommand;
-                            switch (playerCommand) {
-                                case Player.COMMAND_PLAY_PAUSE:
-                                case Player.COMMAND_SEEK_TO_NEXT:
-                                case Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM:
-                                case Player.COMMAND_SEEK_TO_PREVIOUS:
-                                case Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM:
-                                    coldCommand = "playpause";
-                                    break;
-                                default:
-                                    coldCommand = null;
-                                    break;
-                            }
-                            if (coldCommand != null) {
-                                // 冷启动按键走的是 startForegroundService 通道，5 秒内必须进前台；
-                                // 网络流缓冲可能超时，先挂占位通知，播放后由 Media3 替换为真通知
-                                ensurePlaceholderForeground();
-                                boolean ok = liuyinPlayer.handleColdMediaButton(coldCommand);
-                                MediaLog.log(LiuyinMediaService.this, "cold handle " + coldCommand + " ok=" + ok);
-                                if (ok) return Player.COMMAND_INVALID;
-                                releasePlaceholderForeground();
-                                stopSelf();
-                                return Player.COMMAND_INVALID;
-                            }
-                        }
                         switch (playerCommand) {
                             case Player.COMMAND_PLAY_PAUSE:
                                 // 播放/暂停由 JS 统一处理（避免与 MediaSession 直接控制播放器双重切换）
@@ -207,32 +171,6 @@ public class LiuyinMediaService extends MediaSessionService {
                                 return playerCommand;
                         }
                     }
-
-                    @Override
-                    public ListenableFuture<MediaSession.MediaItemsWithStartPosition> onPlaybackResumption(
-                            MediaSession session, MediaSession.ControllerInfo controller) {
-                        // Android 13+ PlaybackResumption：系统在媒体按键/媒体卡上要恢复我们时回调。
-                        // 即使进程被杀、应用被划掉，只要 Session 仍注册且组件可被系统用媒体键拉起，
-                        // 这里就能把播放接回来（有当前曲目则续播；进程冷启动则按持久化记录恢复）。
-                        MediaLog.log(LiuyinMediaService.this, "onPlaybackResumption called");
-                        try {
-                            // 确保已装有曲目：有当前项则续播，进程冷启动则按持久化记录加载
-                            liuyinPlayer.handleColdMediaButton("play");
-                            androidx.media3.common.MediaItem cur = liuyinPlayer.getPlayer().getCurrentMediaItem();
-                            if (cur == null) {
-                                return Futures.immediateFuture(
-                                        new MediaSession.MediaItemsWithStartPosition(java.util.Collections.emptyList(), 0, 0));
-                            }
-                            long pos = liuyinPlayer.getPlayer().getCurrentPosition();
-                            MediaLog.log(LiuyinMediaService.this, "onPlaybackResumption resume pos=" + pos);
-                            return Futures.immediateFuture(new MediaSession.MediaItemsWithStartPosition(
-                                    java.util.Collections.singletonList(cur), 0, pos));
-                        } catch (Throwable t) {
-                            MediaLog.log(LiuyinMediaService.this, "onPlaybackResumption failed: " + t);
-                            return Futures.immediateFuture(
-                                    new MediaSession.MediaItemsWithStartPosition(java.util.Collections.emptyList(), 0, 0));
-                        }
-                    }
                 })
                 .build();
         liuyinPlayer.setMediaSession(mediaSession);
@@ -245,65 +183,66 @@ public class LiuyinMediaService extends MediaSessionService {
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
-        // 从最近任务划掉：立即暂停并摘除媒体标签（状态栏/锁屏）。
-        // 不清队列、不弃焦点、不杀会话、不 stopSelf：
-        // Android 16 上耳机媒体按键只路由给存活的 MediaSession，
-        // 彻底清理会使其失效（见 docs/adr/0003）。
-        // 摘除后进入静默态（LiuyinPlayer.taskRemovedSuppressed）：
-        // 抑制按键会话心跳的 0 音量 play()（它会让 Media3 重新发布标签），
-        // 恢复播放（耳机键/JS/冷启动）即退出静默态，标签随播放重新出现。
-        // 应用在后台（未划掉）时永不触发本方法，故不受影响。
-        MediaLog.log(this, "onTaskRemoved: pause & remove media label, keep session alive");
+        // 划掉任务时暂停并隐藏媒体标签，但保留队列、会话和服务以支持后续恢复。
         try {
             LiuyinPlayer.getInstance(getApplicationContext()).pauseForTaskRemoved();
         } catch (Throwable ignored) {
         }
-        // 延时摘除：等 Media3 异步处理完暂停事件的通知更新（暂停态以普通 notify 发布标签）；
-        // 二次兜底清理晚到的更新
+        taskRemovedSuppressed = true;
+        // Media3 对暂停后的通知更新是异步的，延迟清理并留一次兜底，避免刚移除又被发布。
         mainHandler.postDelayed(this::removeMediaLabel, TASK_REMOVED_LABEL_REMOVE_DELAY_MS);
         mainHandler.postDelayed(this::removeMediaLabel, TASK_REMOVED_LABEL_REMOVE_RETRY_MS);
     }
 
-    /** 摘除媒体标签（暂停态）。恢复播放时 Media3 会重新发布通知。 */
+    @Override
+    public void onUpdateNotification(MediaSession session, boolean startInForegroundRequired) {
+        LiuyinPlayer player = LiuyinPlayer.getInstance(getApplicationContext());
+        if (taskRemovedSuppressed && !player.isPlaybackRequestedCached()) {
+            removeMediaLabel();
+            return;
+        }
+        if (player.isPlaybackRequestedCached()) taskRemovedSuppressed = false;
+        super.onUpdateNotification(session, startInForegroundRequired);
+    }
+
+    /** 移除 Media3 与应用渠道通知，但保留媒体会话。 */
     private void removeMediaLabel() {
         try {
-            // 若已恢复播放（耳机键唤醒等）则不摘。
-            // 注意：ExoPlayer 只允许在创建线程访问，这里可能运行在主线程，
-            // 必须用缓存态（isPlayingCached），不能调 isPlaying()
-            if (LiuyinPlayer.getInstance(getApplicationContext()).isPlayingCached()) return;
-            MediaLog.log(this, "remove media label, keep session");
-            stopForeground(STOP_FOREGROUND_REMOVE);
-            NotificationManager nm = getSystemService(NotificationManager.class);
-            if (nm == null) return;
-            // Media3 默认通知使用自有渠道（default_channel_id），不在我们的 liuyin_media 通道内，
-            // 按通知 ID 兜底取消；暂停态下 Media3 以普通 notify 发布，stopForeground 摘不到它
-            nm.cancel(androidx.media3.session.DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                for (android.service.notification.StatusBarNotification n : nm.getActiveNotifications()) {
-                    if (n.getNotification() == null) continue;
-                    String ch = n.getNotification().getChannelId();
-                    if (CHANNEL_ID.equals(ch)
-                            || androidx.media3.session.DefaultMediaNotificationProvider.DEFAULT_CHANNEL_ID.equals(ch)) {
-                        nm.cancel(n.getId());
+            LiuyinPlayer player = LiuyinPlayer.getInstance(getApplicationContext());
+            if (player.isPlaybackRequestedCached()
+                    || player.isPlayingCached()) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+            } else {
+                stopForeground(true);
+            }
+
+            NotificationManager manager = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                    ? getSystemService(NotificationManager.class)
+                    : (NotificationManager) getSystemService(android.content.Context.NOTIFICATION_SERVICE);
+            if (manager == null) return;
+            manager.cancel(androidx.media3.session.DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                for (android.service.notification.StatusBarNotification notification : manager.getActiveNotifications()) {
+                    if (notification.getNotification() == null) continue;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        String channelId = notification.getNotification().getChannelId();
+                        if (CHANNEL_ID.equals(channelId)
+                                || androidx.media3.session.DefaultMediaNotificationProvider.DEFAULT_CHANNEL_ID.equals(channelId)) {
+                            manager.cancel(notification.getId());
+                        }
+                    } else if (notification.getId() == androidx.media3.session.DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID) {
+                        manager.cancel(notification.getId());
                     }
                 }
             }
-        } catch (Throwable t) {
-            MediaLog.log(this, "remove media label failed: " + t);
+        } catch (Throwable ignored) {
         }
-    }
-
-    /** 供 LiuyinPlayer 心跳结束（静默态下 Media3 重发了标签）后立即摘除，并加一次兜底 */
-    public static void removeMediaLabelNow() {
-        LiuyinMediaService s = instance;
-        if (s == null || s.mainHandler == null) return;
-        MediaLog.log(s, "remove media label now (after reclaim tick)");
-        s.mainHandler.post(s::removeMediaLabel);
-        s.mainHandler.postDelayed(s::removeMediaLabel, TASK_REMOVED_LABEL_REMOVE_DELAY_MS);
     }
 
     @Override
     public void onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null);
         instance = null;
         if (mediaSession != null) {
             mediaSession.release();
@@ -322,40 +261,6 @@ public class LiuyinMediaService extends MediaSessionService {
             channel.setDescription("播放进度与媒体控制");
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) manager.createNotificationChannel(channel);
-        }
-    }
-
-    private volatile boolean placeholderForegroundShown = false;
-
-    /** 冷启动按键恢复期间挂占位前台通知（防 startForegroundService 5 秒超时被杀） */
-    private void ensurePlaceholderForeground() {
-        if (placeholderForegroundShown) return;
-        try {
-            Intent launchIntent = new Intent(this, MainActivity.class);
-            PendingIntent pi = TaskStackBuilder.create(this)
-                    .addNextIntentWithParentStack(launchIntent)
-                    .getPendingIntent(1, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-            android.app.Notification placeholder = new androidx.core.app.NotificationCompat.Builder(this, CHANNEL_ID)
-                    .setSmallIcon(android.R.drawable.ic_media_play)
-                    .setContentTitle(getString(cn.lycool.app.R.string.app_name))
-                    .setContentText("正在恢复播放…")
-                    .setOngoing(true)
-                    .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
-                    .setContentIntent(pi)
-                    .build();
-            startForeground(9527, placeholder);
-            placeholderForegroundShown = true;
-        } catch (Throwable t) {
-            MediaLog.log(this, "placeholder foreground failed: " + t);
-        }
-    }
-
-    private void releasePlaceholderForeground() {
-        if (!placeholderForegroundShown) return;
-        placeholderForegroundShown = false;
-        try {
-            stopForeground(STOP_FOREGROUND_REMOVE);
-        } catch (Throwable ignored) {
         }
     }
 }

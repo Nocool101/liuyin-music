@@ -1,7 +1,9 @@
 package cn.lycool.app.player;
 
 import android.content.Context;
+import android.media.AudioManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
@@ -20,6 +22,8 @@ import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
+
+import java.util.List;
 
 /**
  * Media3 ExoPlayer 封装（单例）：
@@ -45,6 +49,12 @@ public class LiuyinPlayer {
     private boolean handleAudioFocus = true;
     private static final long ENDED_WATCHDOG_MS = 8_000;
     private Runnable endedWatchdog;
+    private volatile boolean lastIsPlaying = false;
+    private volatile boolean lastPlayWhenReady = false;
+    private AudioManager audioManager;
+    private AudioManager.AudioPlaybackCallback audioPlaybackCallback;
+    private Handler audioPlaybackHandler;
+    private float preDuckVolume = -1f;
 
     public static LiuyinPlayer getInstance(Context context) {
         if (instance == null) {
@@ -77,7 +87,14 @@ public class LiuyinPlayer {
         player.addListener(new Player.Listener() {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
+                lastIsPlaying = isPlaying;
+                if (isPlaying) checkForeignPlaybackNow();
                 emit("STATE", isPlaying ? "playing" : "paused");
+            }
+
+            @Override
+            public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                lastPlayWhenReady = playWhenReady;
             }
 
             @Override
@@ -111,7 +128,82 @@ public class LiuyinPlayer {
             }
         });
         playerCreated = true;
+        registerForeignPlaybackMonitor(player);
         return player;
+    }
+
+    /** 监听导航/语音播报；部分 ROM 只在系统混音层压低音乐，不派发音频焦点回调。 */
+    private void registerForeignPlaybackMonitor(ExoPlayer p) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || audioPlaybackCallback != null) return;
+        audioManager = (AudioManager) appContext.getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager == null) return;
+
+        audioPlaybackHandler = new Handler(p.getApplicationLooper());
+        audioPlaybackCallback = new AudioManager.AudioPlaybackCallback() {
+            @Override
+            public void onPlaybackConfigChanged(List<android.media.AudioPlaybackConfiguration> configs) {
+                Handler handler = audioPlaybackHandler;
+                if (handler != null) handler.post(() -> applyForeignPlaybackMute(configs));
+            }
+        };
+        try {
+            audioManager.registerAudioPlaybackCallback(audioPlaybackCallback, audioPlaybackHandler);
+            checkForeignPlaybackNow();
+        } catch (Throwable t) {
+            audioPlaybackCallback = null;
+            audioPlaybackHandler = null;
+            android.util.Log.w("LiuyinPlayer", "navigation audio monitor registration failed", t);
+        }
+    }
+
+    private void checkForeignPlaybackNow() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || audioManager == null) return;
+        try {
+            applyForeignPlaybackMute(audioManager.getActivePlaybackConfigurations());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void applyForeignPlaybackMute(List<android.media.AudioPlaybackConfiguration> configs) {
+        if (!playerCreated || player == null) return;
+        boolean foreignActive = false;
+        if (configs != null) {
+            for (android.media.AudioPlaybackConfiguration config : configs) {
+                try {
+                    android.media.AudioAttributes attributes = config.getAudioAttributes();
+                    if (attributes == null) continue;
+                    int usage = attributes.getUsage();
+                    int contentType = attributes.getContentType();
+                    boolean foreign = usage == android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+                            || usage == android.media.AudioAttributes.USAGE_ASSISTANT
+                            || (usage == android.media.AudioAttributes.USAGE_MEDIA
+                                    && contentType != android.media.AudioAttributes.CONTENT_TYPE_MUSIC);
+                    if (foreign) {
+                        foreignActive = true;
+                        break;
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+
+        if (foreignActive && player.isPlaying() && preDuckVolume < 0) {
+            preDuckVolume = player.getVolume();
+            player.setVolume(0f);
+            android.util.Log.i("LiuyinPlayer", "navigation/assistant audio active; music muted");
+        } else if (!foreignActive && preDuckVolume >= 0) {
+            restoreDuckVolume();
+        }
+    }
+
+    private void restoreDuckVolume() {
+        if (preDuckVolume < 0) return;
+        float restoreVolume = preDuckVolume;
+        preDuckVolume = -1f;
+        if (playerCreated && player != null) {
+            player.setVolume(restoreVolume);
+            android.util.Log.i("LiuyinPlayer", "navigation/assistant audio ended; music volume restored");
+        }
     }
 
     public void setReactContext(ReactApplicationContext ctx) {
@@ -132,7 +224,7 @@ public class LiuyinPlayer {
      * 音频焦点策略（JS 设置 player.isHandleAudioFocus）：
      * - 其他播放器抢焦点（永久丢失）：暂停且不自动恢复，等用户手动再播
      * - 来电/语音助手/微信电话（瞬态丢失）：暂停，焦点归还后自动续播
-     * - 导航/消息提示音（可压低）：音量降到 20% 继续播，结束后还原
+     * - 导航/语音播报：额外监听外部播放，播报期间静音并在结束后还原
      */
     public synchronized void setHandleAudioFocus(boolean enable) {
         if (handleAudioFocus == enable) return;
@@ -223,6 +315,7 @@ public class LiuyinPlayer {
             disarmEndedWatchdog();
             p.prepare();
             if (positionMs > 0) p.seekTo((long) positionMs);
+            lastPlayWhenReady = true;
             p.play();
         } catch (Throwable t) {
             emit("ERROR", String.valueOf(t.getMessage()));
@@ -231,6 +324,7 @@ public class LiuyinPlayer {
 
     public void play() {
         disarmEndedWatchdog();
+        lastPlayWhenReady = true;
         ensurePlayer().play();
     }
 
@@ -265,8 +359,33 @@ public class LiuyinPlayer {
         return player.isPlaying();
     }
 
+    /** 线程安全的播放状态缓存，供摘除媒体通知时读取。 */
+    public boolean isPlayingCached() {
+        return lastIsPlaying;
+    }
+
+    /** Thread-safe play intent, including the buffering period before playback starts. */
+    public boolean isPlaybackRequestedCached() {
+        return lastPlayWhenReady;
+    }
+
+    /** 划掉任务时只暂停已创建的播放器，不在清理流程中创建新播放器。 */
+    public void pauseForTaskRemoved() {
+        disarmEndedWatchdog();
+        if (playerCreated && player != null) {
+            player.pause();
+            lastIsPlaying = player.isPlaying();
+            lastPlayWhenReady = player.getPlayWhenReady();
+        }
+    }
+
     public void setVolume(double volume) {
-        ensurePlayer().setVolume((float) volume);
+        ExoPlayer p = ensurePlayer();
+        if (preDuckVolume >= 0) {
+            preDuckVolume = (float) volume;
+            return;
+        }
+        p.setVolume((float) volume);
     }
 
     public void setRate(double rate) {

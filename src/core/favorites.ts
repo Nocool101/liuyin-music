@@ -53,7 +53,7 @@ export const syncFavorites = async(): Promise<void> => {
     if (!listsEqual(currentLove, loveSongs)) {
       if (lastLocalWriteAt > syncStartedAt) return
       state.favoriteIds = new Set(loveSongs.map(s => s.id))
-      // 服务器同步覆盖：标记 isRemote，避免播放器把"当前歌被覆盖移除"误判为用户删歌而自动跳歌
+      // 服务器列表覆盖标记为远程变更，避免播放中的搜索歌曲被误判成用户删除。
       await overwriteListMusics(LIST_IDS.LOVE, loveSongs, true)
     }
 
@@ -89,7 +89,7 @@ export const loadFavorites = async(): Promise<void> => {
 
     state.favoriteIds = new Set(songs.map(s => s.id))
 
-    // Update the love list in the store（服务器拉取覆盖，标记 isRemote 防误跳歌）
+    // 服务器拉取覆盖标记为远程变更，避免误触发播放列表自动切歌。
     await overwriteListMusics(LIST_IDS.LOVE, songs, true)
   } catch (err: any) {
     state.error = err.message ?? 'Failed to load favorites'

@@ -154,8 +154,9 @@ export const getMusicUrl = async(songInfo: any, quality: string): Promise<MusicU
 // URL 可用性探测（照抄 Web 播放器 applyAutoProxy 的 probe：Range 轻量探测）。
 // 关键：必须带浏览器 UA——多数音乐 CDN 对非浏览器 UA（RN fetch 的 okhttp 风格）返回 403，
 // 不带浏览器 UA 会把"实际可用"的链接误判为不可用。
-// 超时 8 秒：服务器代理转发需要时间（服务器→CDN + 返回），3 秒会误判。
-export const probeUrl = async(url: string, timeout = 8000): Promise<boolean> => {
+// 超时默认 3 秒：CDN 冷启动一般 <2s。调用方失败后会回退服务器代理兜底，
+// 超时过长会把播放卡在"获取链接中"（RN fetch 建连慢时尤为明显）。
+export const probeUrl = async(url: string, timeout = 3000): Promise<boolean> => {
   try {
     const controller = new AbortController()
     const id = setTimeout(() => controller.abort(), timeout)

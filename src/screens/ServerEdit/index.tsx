@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { View, ScrollView, Alert, TextInput } from 'react-native'
 import Text from '@/components/common/Text'
 import Button from '@/components/common/Button'
@@ -6,8 +6,6 @@ import { navigations } from '@/navigation'
 import { loadServerConfigs, saveServerConfigs, createServerConfig, connectServer } from '@/plugins/lxserver'
 import { addConfig, updateConfig } from '@/store/server/action'
 import { useStatusbarHeight } from '@/store/common/hook'
-import { setComponentId } from '@/core/common'
-import { COMPONENT_IDS } from '@/config/constant'
 import { createStyle } from '@/utils/tools'
 
 interface Props {
@@ -17,13 +15,6 @@ interface Props {
 
 export default ({ componentId, config }: Props) => {
   const statusBarHeight = useStatusbarHeight()
-
-  // 注册 componentId：返回上一层时触发 componentIdsUpdated 事件（见 ServerList）
-  useEffect(() => {
-    setComponentId(COMPONENT_IDS.serverEdit, componentId)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
   const [name, setName] = useState(config?.name ?? '')
   const [baseUrl, setBaseUrl] = useState(config?.baseUrl ?? '')
   const [username, setUsername] = useState(config?.username ?? '')
@@ -113,7 +104,7 @@ export default ({ componentId, config }: Props) => {
           style={styles.input}
           value={baseUrl}
           onChangeText={setBaseUrl}
-          placeholder="http://192.168.1.100:9527"
+          placeholder="http://192.168.1.4:9527"
           placeholderTextColor="#999"
           autoCapitalize="none"
           keyboardType="url"

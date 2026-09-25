@@ -13,7 +13,6 @@ import {
   liuyinGetCacheSize,
   liuyinIsCached,
   liuyinClearCache,
-  liuyinRemoveCache,
   liuyinSetVolume,
   liuyinStop,
 } from './liuyinPlayer'
@@ -28,8 +27,6 @@ export const isEmpty = (trackId = global.lx.playerTrackId) => {
 export const isTempId = (trackId = global.lx.playerTrackId) => !trackId || tempIdRxp.test(trackId)
 
 export const setResource = (musicInfo: LX.Player.PlayMusic, url: string, duration?: number) => {
-  // 记录当前播放直链：提前结束恢复时需按该 key 清理可能损坏的媒体缓存
-  global.lx.playerPlayUrl = url
   handlePlayMusic(musicInfo, url, duration ?? 0)
 }
 
@@ -64,7 +61,6 @@ export const updateNowPlayingTitles = async(titles: NowPlayingTitles) => {
 export const isCached = async(url: string): Promise<boolean> => liuyinIsCached(url)
 export const getCacheSize = async(): Promise<number> => liuyinGetCacheSize()
 export const clearCache = async() => liuyinClearCache()
-export const removeCache = async(url: string): Promise<boolean> => liuyinRemoveCache(url)
 export const migratePlayerCache = async() => {
   const newCachePath = privateStorageDirectoryPath + '/TrackPlayer'
   if (await existsFile(newCachePath)) return

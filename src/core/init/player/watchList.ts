@@ -4,7 +4,7 @@ import { throttleBackgroundTimer } from '@/utils/tools'
 import playerState from '@/store/player/state'
 
 const changedListIds = new Set<string | null>()
-// 节流窗口内是否有本地发起的列表变更（远程同步覆盖不触发自动跳歌）
+// 节流窗口内是否发生了本地列表变更；服务器覆盖不应被当作用户删歌。
 let hasLocalChange = false
 
 export default () => {
@@ -20,11 +20,8 @@ export default () => {
 
     const { playIndex } = updatePlayIndex()
     if (playIndex < 0) { // 歌曲被移除
-      // 远程同步（服务器列表覆盖）把当前歌"移除"不是用户意图，不能自动跳歌：
-      // 搜索点歌只写本地默认列表，会被收藏同步的服务器列表覆盖，
-      // 若据此切歌，表现为歌曲播放一分钟左右就跳到无关歌曲
+      // 远程同步覆盖导致的"歌曲消失"不是用户删歌意图，不自动跳歌。
       if (!isLocalChange || playerState.playMusicInfo.isTempPlay) return
-      // console.log('current music removed')
       void playNext(true)
     }
   })

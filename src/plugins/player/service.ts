@@ -1,8 +1,8 @@
 import BackgroundTimer from 'react-native-background-timer'
 import playerState from '@/store/player/state'
 import { exitApp } from '@/core/common'
-import { playNext, handlePlaybackError, resetPlayErrorCount, verifyPlaybackEnded } from '@/core/player/player'
-import { addLiuyinPlayerListener, initLiuyinPlayer, liuyinGetState, liuyinPlay } from './liuyinPlayer'
+import { playNext, handlePlaybackError, resetPlayErrorCount } from '@/core/player/player'
+import { addLiuyinPlayerListener, initLiuyinPlayer, liuyinPlay } from './liuyinPlayer'
 
 let isInitialized = false
 
@@ -48,7 +48,6 @@ const registerPlaybackService = async() => {
           case 'playing':
             global.lx.waitingForPlayback = false
             clearBufferRetry()
-            global.lx.bufferRetryCount = 0
             resetPlayErrorCount()
             global.app_event.playerPlaying()
             global.app_event.play()
@@ -71,30 +70,22 @@ const registerPlaybackService = async() => {
             break
         }
         break
-      case 'ENDED': {
+      case 'ENDED':
         if (global.lx.isPlayedStop) return handleExitApp('Timeout Exit')
-        // 先校验是否真正播完：流被截断的"提前结束"会触发恢复重播（verifyPlaybackEnded
-        // 内部已接管），不能在这里直接切歌，否则歌曲没放完就跳到下一首
+        global.app_event.playerEnded()
+        global.app_event.playerEmptied()
+        // 直接触发自动切歌：后台时 Event 的 setImmediate 派发与 JS setTimeout 不可靠，
+        // 不能依赖事件链；这里同步调用 playNext，并用 BackgroundTimer 兜底重试。
         const endedSongId = playerState.playMusicInfo.musicInfo?.id
-        void verifyPlaybackEnded().then((recovered) => {
-          if (recovered) return
-          // 校验期间用户已手动切歌/停止：不再自动切歌
+        void playNext(true)
+        BackgroundTimer.setTimeout(() => {
+          if (global.lx.isPlayedStop) return
+          if (playerState.isPlay) return
+          // 已切到下一首（或用户手动点了别的歌）则不再重试，避免双重切歌
           if (playerState.playMusicInfo.musicInfo?.id != endedSongId) return
-          global.app_event.playerEnded()
-          global.app_event.playerEmptied()
-          // 直接触发自动切歌：后台时 Event 的 setImmediate 派发与 JS setTimeout 不可靠，
-          // 不能依赖事件链；这里同步调用 playNext，并用 BackgroundTimer 兜底重试。
           void playNext(true)
-          BackgroundTimer.setTimeout(() => {
-            if (global.lx.isPlayedStop) return
-            if (playerState.isPlay) return
-            // 已切到下一首（或用户手动点了别的歌）则不再重试，避免双重切歌
-            if (playerState.playMusicInfo.musicInfo?.id != endedSongId) return
-            void playNext(true)
-          }, 10_000)
-        })
+        }, 10_000)
         break
-      }
       case 'ERROR':
         global.app_event.error()
         global.app_event.playerError()
@@ -106,16 +97,6 @@ const registerPlaybackService = async() => {
   })
 
   isInitialized = true
-
-  // 状态回同步：JS 启动前原生可能已在播放（如蓝牙耳机按键在应用未打开时
-  // 冷启动恢复了上次曲目），把真实状态同步给 JS，避免界面显示与实际不符
-  void liuyinGetState().then((state) => {
-    if (state != 'playing') return
-    if (global.lx.gettingUrlId || global.lx.isChangingMusic) return
-    global.lx.waitingForPlayback = false
-    global.app_event.playerPlaying()
-    global.app_event.play()
-  })
 }
 
 

@@ -20,6 +20,8 @@ export default forwardRef<MusicListType, {}>((props, ref) => {
   useImperativeHandle(ref, () => ({
     async loadList(text, source) {
       // const listDetailInfo = searchMusicState.listDetailInfo
+      searchInfoRef.current.text = text
+      searchInfoRef.current.source = source
       listRef.current?.setList([], false, source == 'all')
       if (searchMusicState.searchText == text && searchMusicState.source == source && searchMusicState.listInfos[searchMusicState.source]!.list.length) {
         requestAnimationFrame(() => {
@@ -28,11 +30,9 @@ export default forwardRef<MusicListType, {}>((props, ref) => {
       } else {
         listRef.current?.setStatus('loading')
         const page = 1
-        searchInfoRef.current.text = text
-        searchInfoRef.current.source = source
-        // 聚合搜索渐进渲染：每个音源返回即刷新列表，不等最慢的源
         return search(text, page, source, (partialList) => {
-          if (isUnmountedRef.current || !partialList.length) return
+          if (isUnmountedRef.current || !partialList.length
+            || searchInfoRef.current.text != text || searchInfoRef.current.source != source) return
           listRef.current?.setList(partialList, false, source == 'all')
           listRef.current?.setStatus('idle')
         }).then((list) => {
@@ -60,8 +60,10 @@ export default forwardRef<MusicListType, {}>((props, ref) => {
   const handleRefresh: OnlineListProps['onRefresh'] = () => {
     const page = 1
     listRef.current?.setStatus('refreshing')
-    search(searchInfoRef.current.text, page, searchInfoRef.current.source, (partialList) => {
-      if (isUnmountedRef.current || !partialList.length) return
+    const { text, source } = searchInfoRef.current
+    search(text, page, source, (partialList) => {
+      if (isUnmountedRef.current || !partialList.length
+        || searchInfoRef.current.text != text || searchInfoRef.current.source != source) return
       listRef.current?.setList(partialList, false, searchInfoRef.current.source == 'all')
       listRef.current?.setStatus('idle')
     }).then((list) => {
@@ -94,4 +96,3 @@ export default forwardRef<MusicListType, {}>((props, ref) => {
     checkHomePagerIdle
   />
 })
-

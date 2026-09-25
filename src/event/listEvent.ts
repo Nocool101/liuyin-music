@@ -249,4 +249,3 @@ export type ListEventTypes = Omit<EventType, keyof Omit<Event, 'on' | 'off'>>
 export const createListEventHub = (): ListEventTypes => {
   return new ListEvent()
 }
-

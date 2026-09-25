@@ -9,15 +9,12 @@ import playerState from '@/store/player/state'
 import musicSdk from '@/utils/musicSdk'
 import { toOldMusicInfo } from '@/utils'
 
-// 单曲点播（搜索等入口）：歌曲不写入默认列表，以临时播放立即开播，
-// 播放列表指向收藏列表——歌曲播完后自动接收藏列表的下一首。
-// 注意：临时播放的 listId 不会自动更新 playInfo.playerListId（只有 setPlayListId 会），
-// 必须显式切换，否则播完后 playNext 仍从旧列表取歌
+// 搜索等单曲点播使用临时播放，不改写默认列表；播完后接收藏列表。
+// 临时播放不会自动更新 playInfo.playerListId，因此需要显式切换播放列表。
 export const handlePlay = (musicInfo: LX.Music.MusicInfoOnline) => {
   setPlayListId(LIST_IDS.LOVE)
   clearTempPlayeList()
   addTempPlayList([{ listId: LIST_IDS.LOVE, musicInfo }])
-  // 已有歌在播时 addTempPlayList 只入队不自动开播，需主动切换到点播的歌
   if (playerState.playMusicInfo.musicInfo) void playNext()
 }
 export const handlePlayLater = (musicInfo: LX.Music.MusicInfoOnline, selectedList: LX.Music.MusicInfoOnline[], onCancelSelect: () => void) => {
@@ -55,4 +52,3 @@ export const handleDislikeMusic = async(musicInfo: LX.Music.MusicInfoOnline) => 
     void playNext(true)
   }
 }
-

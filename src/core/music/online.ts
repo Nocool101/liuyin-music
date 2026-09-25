@@ -7,23 +7,12 @@ import { updateListMusics } from '@/core/list'
 import settingState from '@/store/setting/state'
 import { subsonic } from '@/plugins/subsonic'
 import { lxApi } from '@/plugins/lxserver'
-import { liuyinNativeLog } from '@/plugins/player/liuyinPlayer'
 
 import {
   buildLyricInfo,
   getPlayQuality,
   getCachedLyricInfo,
 } from './utils'
-
-// 记录解析结果的 URL 形态（去掉 query，避免把认证参数写入日志）
-const logUrlShape = (url: string): string => {
-  try {
-    const u = new URL(url)
-    return `${u.protocol}//${u.host}${u.pathname}`
-  } catch {
-    return url.slice(0, 60)
-  }
-}
 
 // 音质降级链（照抄 Web 播放器 QUALITY_PRIORITY，从目标音质向下降级）
 const QUALITY_DEGRADE_CHAIN: LX.Quality[] = ['flac24bit', 'flac', '320k', '192k', '128k']
@@ -35,19 +24,19 @@ const getQualityChain = (target: LX.Quality): LX.Quality[] => {
 }
 
 // 解析出 URL 后探测可用性（照抄 Web 播放器 applyAutoProxy probe 的思路）：
-// 直链与服务器代理并行探测，直链可用优先（快、省服务器流量），
-// 直链不可达（客户端网络/运营商到 CDN 不通、Referer 校验等）则退回服务器代理，
-// 两者都不可用返回 null，让上层继续音质降级/跨平台换源轮询。
+// 先探测直链（快、省服务器流量）；直链不可达（客户端网络/运营商到 CDN 不通、
+// Referer 校验等）再探测服务器代理；两者都不可用返回 null，
+// 让上层继续音质降级/跨平台换源轮询——不把"已知坏链接"交给播放器白等。
+// 探测超时 3 秒：CDN 冷启动一般 <2s；探测是快速失败（4xx 立即返回 false），
+// 只有挂起才吃满超时，坏链路降级链全程仍在 10s 量级。
 const probeResolvedUrl = async(url: string, filename: string): Promise<string | null> => {
+  if (await lxApi.probeUrl(url, PROBE_TIMEOUT)) return url
   const proxied = lxApi.getProxiedStreamUrl(url, filename)
-  const [directOk, proxyOk] = await Promise.all([
-    lxApi.probeUrl(url),
-    lxApi.probeUrl(proxied),
-  ])
-  if (directOk) return url
-  if (proxyOk) return proxied
+  if (await lxApi.probeUrl(proxied, PROBE_TIMEOUT)) return proxied
   return null
 }
+
+const PROBE_TIMEOUT = 3000
 
 export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSource = true, onToggleSource = () => {} }: {
   musicInfo: LX.Music.MusicInfoOnline
@@ -59,8 +48,6 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
   const targetQuality = quality ?? getPlayQuality(settingState.setting['player.playQuality'], musicInfo)
   const cachedUrl = await getStoreMusicUrl(musicInfo, targetQuality)
   if (cachedUrl && !isRefresh) return cachedUrl
-
-  liuyinNativeLog(`resolve ${musicInfo.id} q=${targetQuality} refresh=${!!isRefresh} qualitys=${JSON.stringify(musicInfo.meta._qualitys)} setting=${settingState.setting['player.playQuality']}`)
 
   let lastError: any = null
   const filename = `${musicInfo.singer} - ${musicInfo.name}.mp3`
@@ -74,14 +61,12 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
     try {
       const result = await lxApi.getMusicUrl(musicInfo, q)
       const usableUrl = await probeResolvedUrl(result.url, filename)
-      liuyinNativeLog(`resolved ${musicInfo.id} q=${q} direct=${result.url === usableUrl ? 'direct' : 'proxy'} url=${logUrlShape(usableUrl ?? 'null')}${result.type ? ` type=${result.type}` : ''}${result.sourceName ? ` src=${result.sourceName}` : ''}`)
       if (usableUrl) {
         void saveMusicUrl(musicInfo, targetQuality, usableUrl)
         return usableUrl
       }
     } catch (err) {
       lastError = err
-      liuyinNativeLog(`resolve failed ${musicInfo.id} q=${q}: ${err?.message ?? err}`)
       console.log(`Internal API music URL failed for ${musicInfo.id} (${q}):`, err?.message ?? err)
     }
   }
