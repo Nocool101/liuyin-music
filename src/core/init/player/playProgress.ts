@@ -1,5 +1,5 @@
 import { updateListMusics } from '@/core/list'
-import { setMaxplayTime, setNowPlayTime } from '@/core/player/progress'
+import { markProgressSampled, setMaxplayTime, setNowPlayTime } from '@/core/player/progress'
 import { setCurrentTime, getDuration, getPosition } from '@/plugins/player'
 import { formatPlayTime2 } from '@/utils/common'
 import { savePlayInfo } from '@/utils/data'
@@ -36,6 +36,7 @@ export default () => {
         return
       }
       if (!position || id != playerState.musicInfo.id) return
+      markProgressSampled()
       setNowPlayTime(position)
       if (!playerState.isPlay) return
 

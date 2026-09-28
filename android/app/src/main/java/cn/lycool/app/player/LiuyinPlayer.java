@@ -1,6 +1,7 @@
 package cn.lycool.app.player;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
@@ -48,6 +49,8 @@ public class LiuyinPlayer {
     private long cacheMaxBytes = 1024L * 1024L * 1024L;
     private boolean handleAudioFocus = true;
     private static final long ENDED_WATCHDOG_MS = 8_000;
+    /** 最后播放曲目的持久化（进程冷启动时由媒体键恢复） */
+    private static final String LAST_TRACK_PREFS = "liuyin_last_track";
     private Runnable endedWatchdog;
     private volatile boolean lastIsPlaying = false;
     private volatile boolean lastPlayWhenReady = false;
@@ -317,6 +320,7 @@ public class LiuyinPlayer {
             if (positionMs > 0) p.seekTo((long) positionMs);
             lastPlayWhenReady = true;
             p.play();
+            saveLastTrack();
         } catch (Throwable t) {
             emit("ERROR", String.valueOf(t.getMessage()));
         }
@@ -330,11 +334,13 @@ public class LiuyinPlayer {
 
     public void pause() {
         disarmEndedWatchdog();
+        saveLastTrack();
         ensurePlayer().pause();
     }
 
     public void stop() {
         disarmEndedWatchdog();
+        saveLastTrack();
         ensurePlayer().stop();
     }
 
@@ -373,9 +379,85 @@ public class LiuyinPlayer {
     public void pauseForTaskRemoved() {
         disarmEndedWatchdog();
         if (playerCreated && player != null) {
+            saveLastTrack();
             player.pause();
             lastIsPlaying = player.isPlaying();
             lastPlayWhenReady = player.getPlayWhenReady();
+        }
+    }
+
+    // ---- 冷启动媒体键（应用未打开 / JS 未运行时的原生恢复）----
+
+    /** 持久化最后播放曲目，供进程冷启动时由媒体键恢复播放 */
+    private void saveLastTrack() {
+        try {
+            ExoPlayer p = player;
+            if (!playerCreated || p == null) return;
+            MediaItem item = p.getCurrentMediaItem();
+            if (item == null || item.localConfiguration == null) return;
+            CharSequence title = item.mediaMetadata.title;
+            CharSequence artist = item.mediaMetadata.artist;
+            CharSequence album = item.mediaMetadata.albumTitle;
+            long duration = p.getDuration();
+            long position = p.getCurrentPosition();
+            appContext.getSharedPreferences(LAST_TRACK_PREFS, Context.MODE_PRIVATE).edit()
+                    .putString("url", item.localConfiguration.uri.toString())
+                    .putString("title", title == null ? "" : title.toString())
+                    .putString("artist", artist == null ? "" : artist.toString())
+                    .putString("album", album == null ? "" : album.toString())
+                    .putString("artwork", item.mediaMetadata.artworkUri == null ? "" : item.mediaMetadata.artworkUri.toString())
+                    .putLong("durationMs", duration == C.TIME_UNSET ? 0 : duration)
+                    .putLong("positionMs", position < 0 ? 0 : position)
+                    .apply();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public void saveLastTrackPosition() {
+        saveLastTrack();
+    }
+
+    /**
+     * 冷启动媒体键：JS 未运行时直接原生恢复/暂停上次曲目，
+     * 实现“不开 App 也能用耳机键播放”。
+     */
+    public boolean handleColdMediaButton(String command) {
+        try {
+            if (playerCreated && player != null && player.getCurrentMediaItem() != null) {
+                switch (command) {
+                    case "pause":
+                        saveLastTrack();
+                        player.pause();
+                        return true;
+                    case "play":
+                        player.play();
+                        return true;
+                    default: // playpause / next / prev
+                        if (player.isPlaying()) {
+                            saveLastTrack();
+                            player.pause();
+                        } else {
+                            player.play();
+                        }
+                        return true;
+                }
+            }
+            if ("pause".equals(command)) return false;
+            SharedPreferences sp = appContext.getSharedPreferences(LAST_TRACK_PREFS, Context.MODE_PRIVATE);
+            String url = sp.getString("url", "");
+            if (url.isEmpty()) return false;
+            load(url,
+                    sp.getString("title", ""),
+                    sp.getString("artist", ""),
+                    sp.getString("album", ""),
+                    sp.getString("artwork", ""),
+                    sp.getLong("durationMs", 0),
+                    sp.getLong("positionMs", 0));
+            android.util.Log.i("LiuyinPlayer", "cold media button: restored last track");
+            return true;
+        } catch (Throwable t) {
+            android.util.Log.w("LiuyinPlayer", "cold media button failed", t);
+            return false;
         }
     }
 

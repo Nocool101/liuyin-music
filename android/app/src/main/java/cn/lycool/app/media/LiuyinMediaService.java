@@ -15,6 +15,9 @@ import androidx.media3.session.MediaSession;
 import androidx.media3.session.SessionCommands;
 import androidx.media3.session.MediaSessionService;
 
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+
 import cn.lycool.app.MainActivity;
 import cn.lycool.app.player.LiuyinPlayer;
 
@@ -140,6 +143,33 @@ public class LiuyinMediaService extends MediaSessionService {
                     @Override
                     public int onPlayerCommandRequest(MediaSession session, MediaSession.ControllerInfo controller, int playerCommand) {
                         android.util.Log.i("LiuyinMedia", "playerCommand=" + playerCommand);
+                        // JS 未运行（应用未打开、进程刚由媒体按键拉起）：
+                        // 播放类按键直接原生恢复/暂停上次曲目，实现“不开 App 也能耳机双击播放”
+                        if (!MediaBridgeModule.hasContext()) {
+                            String coldCommand = null;
+                            switch (playerCommand) {
+                                case Player.COMMAND_PLAY_PAUSE:
+                                case Player.COMMAND_SEEK_TO_NEXT:
+                                case Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM:
+                                case Player.COMMAND_SEEK_TO_PREVIOUS:
+                                case Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM:
+                                    coldCommand = "playpause";
+                                    break;
+                                default:
+                                    break;
+                            }
+                            if (coldCommand != null) {
+                                // 冷启动按键走的是 startForegroundService 通道，5 秒内必须进前台；
+                                // 网络流缓冲可能超时，先挂占位通知，播放后由 Media3 替换为真通知
+                                ensurePlaceholderForeground();
+                                boolean ok = liuyinPlayer.handleColdMediaButton(coldCommand);
+                                android.util.Log.i("LiuyinMedia", "cold handle " + coldCommand + " ok=" + ok);
+                                if (ok) return Player.COMMAND_INVALID;
+                                releasePlaceholderForeground();
+                                stopSelf();
+                                return Player.COMMAND_INVALID;
+                            }
+                        }
                         switch (playerCommand) {
                             case Player.COMMAND_PLAY_PAUSE:
                                 // 播放/暂停由 JS 统一处理（避免与 MediaSession 直接控制播放器双重切换）
@@ -169,6 +199,31 @@ public class LiuyinMediaService extends MediaSessionService {
                             default:
                                 // seek 等由 MediaSession 直接控制播放器
                                 return playerCommand;
+                        }
+                    }
+
+                    @Override
+                    public ListenableFuture<MediaSession.MediaItemsWithStartPosition> onPlaybackResumption(
+                            MediaSession session, MediaSession.ControllerInfo controller) {
+                        // Android 13+ PlaybackResumption：系统在媒体按键/媒体卡上要恢复我们时回调。
+                        // 即使进程被杀、应用被划掉，只要 Session 仍注册且组件可被系统用媒体键拉起，
+                        // 这里就能把播放接回来（有当前曲目则续播；进程冷启动则按持久化记录恢复）。
+                        try {
+                            // 确保已装有曲目：有当前项则续播，进程冷启动则按持久化记录加载
+                            liuyinPlayer.handleColdMediaButton("play");
+                            androidx.media3.common.MediaItem cur = liuyinPlayer.getPlayer().getCurrentMediaItem();
+                            if (cur == null) {
+                                return Futures.immediateFuture(
+                                        new MediaSession.MediaItemsWithStartPosition(java.util.Collections.emptyList(), 0, 0));
+                            }
+                            long pos = liuyinPlayer.getPlayer().getCurrentPosition();
+                            android.util.Log.i("LiuyinMedia", "onPlaybackResumption resume pos=" + pos);
+                            return Futures.immediateFuture(new MediaSession.MediaItemsWithStartPosition(
+                                    java.util.Collections.singletonList(cur), 0, pos));
+                        } catch (Throwable t) {
+                            android.util.Log.w("LiuyinMedia", "onPlaybackResumption failed", t);
+                            return Futures.immediateFuture(
+                                    new MediaSession.MediaItemsWithStartPosition(java.util.Collections.emptyList(), 0, 0));
                         }
                     }
                 })
@@ -261,6 +316,44 @@ public class LiuyinMediaService extends MediaSessionService {
             channel.setDescription("播放进度与媒体控制");
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) manager.createNotificationChannel(channel);
+        }
+    }
+
+    private volatile boolean placeholderForegroundShown = false;
+
+    /** 冷启动按键恢复期间挂占位前台通知（防 startForegroundService 5 秒超时被杀） */
+    private void ensurePlaceholderForeground() {
+        if (placeholderForegroundShown) return;
+        try {
+            Intent launchIntent = new Intent(this, MainActivity.class);
+            PendingIntent pi = TaskStackBuilder.create(this)
+                    .addNextIntentWithParentStack(launchIntent)
+                    .getPendingIntent(1, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            android.app.Notification placeholder = new androidx.core.app.NotificationCompat.Builder(this, CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_media_play)
+                    .setContentTitle(getString(cn.lycool.app.R.string.app_name))
+                    .setContentText("正在恢复播放…")
+                    .setOngoing(true)
+                    .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
+                    .setContentIntent(pi)
+                    .build();
+            startForeground(9527, placeholder);
+            placeholderForegroundShown = true;
+        } catch (Throwable t) {
+            android.util.Log.w("LiuyinMedia", "placeholder foreground failed", t);
+        }
+    }
+
+    private void releasePlaceholderForeground() {
+        if (!placeholderForegroundShown) return;
+        placeholderForegroundShown = false;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+            } else {
+                stopForeground(true);
+            }
+        } catch (Throwable ignored) {
         }
     }
 }

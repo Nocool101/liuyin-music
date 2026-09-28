@@ -46,6 +46,11 @@ public class MediaBridgeModule extends ReactContextBaseJavaModule {
         return NAME;
     }
 
+    /** JS 是否在运行（进程冷启动、JS 未加载时为 false，媒体按键走原生恢复播放） */
+    public static boolean hasContext() {
+        return sContext != null;
+    }
+
     public static void emitCommand(String command, long positionMs) {
         Command cmd = new Command(command, positionMs);
         ReactApplicationContext ctx = sContext;
