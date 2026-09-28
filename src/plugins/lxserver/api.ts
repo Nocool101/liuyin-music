@@ -86,6 +86,9 @@ export interface MusicUrlResult {
   url: string
   type: string
   sourceName?: string
+  sourceId?: string
+  /** 服务端是否还有其它音源可尝试（false = 只有这一个源，换音质结果相同） */
+  hasMoreSources?: boolean
   error?: string
 }
 

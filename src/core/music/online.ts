@@ -24,19 +24,25 @@ const getQualityChain = (target: LX.Quality): LX.Quality[] => {
 }
 
 // 解析出 URL 后探测可用性（照抄 Web 播放器 applyAutoProxy probe 的思路）：
-// 先探测直链（快、省服务器流量）；直链不可达（客户端网络/运营商到 CDN 不通、
-// Referer 校验等）再探测服务器代理；两者都不可用返回 null，
-// 让上层继续音质降级/跨平台换源轮询——不把"已知坏链接"交给播放器白等。
-// 探测超时 3 秒：CDN 冷启动一般 <2s；探测是快速失败（4xx 立即返回 false），
-// 只有挂起才吃满超时，坏链路降级链全程仍在 10s 量级。
+// 直链与服务器代理**并行**探测，直链可用优先（快、省服务器流量）：
+// 直链不可达（客户端网络/运营商到 CDN 不通、Referer 校验等）时，
+// 无需再等一轮串行超时（最坏 3s×2 串行 → 并行后最坏 3s），
+// 两者都不可用返回 null，让上层继续音质降级/跨平台换源轮询——
+// 不把“已知坏链接”交给播放器白等。
 const probeResolvedUrl = async(url: string, filename: string): Promise<string | null> => {
-  if (await lxApi.probeUrl(url, PROBE_TIMEOUT)) return url
   const proxied = lxApi.getProxiedStreamUrl(url, filename)
-  if (await lxApi.probeUrl(proxied, PROBE_TIMEOUT)) return proxied
+  const [directOk, proxyOk] = await Promise.all([
+    lxApi.probeUrl(url, PROBE_TIMEOUT),
+    lxApi.probeUrl(proxied, PROBE_TIMEOUT),
+  ])
+  if (directOk) return url
+  if (proxyOk) return proxied
   return null
 }
 
-const PROBE_TIMEOUT = 3000
+// 探测超时 2 秒：CDN 冷启动一般 <2s；探测是快速失败（4xx 立即返回 false），
+// 只有 DNS/连接挂起才吃满超时——过长的超时会把播放卡在“获取链接中”。
+const PROBE_TIMEOUT = 2000
 
 export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSource = true, onToggleSource = () => {} }: {
   musicInfo: LX.Music.MusicInfoOnline
@@ -65,6 +71,10 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
         void saveMusicUrl(musicInfo, targetQuality, usableUrl)
         return usableUrl
       }
+      // 探测失败（链接不可达）：若服务端已无其它音源可尝试，换音质只会得到同一来源的
+      // 同一链接，继续降级只是白等一轮解析+探测——直接进入跨平台换源/Subsonic 兜底。
+      // hasMoreSources 缺失（旧版服务器）时保持原有逐级降级行为。
+      if (result.hasMoreSources === false) break
     } catch (err) {
       lastError = err
       console.log(`Internal API music URL failed for ${musicInfo.id} (${q}):`, err?.message ?? err)

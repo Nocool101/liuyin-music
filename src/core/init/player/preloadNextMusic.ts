@@ -55,7 +55,10 @@ export default () => {
 
   const handlePlayProgressChanged: typeof global.state_event.playProgressChanged = (progress) => {
     const duration = progress.maxPlayTime
-    if (duration > 10 && duration - progress.nowPlayTime < 10 && !preloadMusicInfo.info) {
+    // 预取提前量：本地解析链路（服务端逐源轮询 + 探测）可能耗时数秒到十几秒，
+    // 上游的“剩余 10s”在自建服务器链路上经常来不及，切歌时会干等解析。
+    // 改为剩余 45s 预取（短歌 <60s 不预取），给解析留足时间，切歌直接命中缓存。
+    if (duration > 60 && duration - progress.nowPlayTime < 45 && !preloadMusicInfo.info) {
       void preloadNextMusicUrl(progress.nowPlayTime)
     }
   }
