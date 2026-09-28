@@ -1,7 +1,12 @@
 package cn.lycool.app.player;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.media.AudioDeviceCallback;
+import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
@@ -54,6 +59,8 @@ public class LiuyinPlayer {
     private Runnable endedWatchdog;
     private volatile boolean lastIsPlaying = false;
     private volatile boolean lastPlayWhenReady = false;
+    /** 因耳机/蓝牙断开而暂停（用于重连后自动续播） */
+    private volatile boolean pausedByNoisy = false;
     private AudioManager audioManager;
     private AudioManager.AudioPlaybackCallback audioPlaybackCallback;
     private Handler audioPlaybackHandler;
@@ -132,7 +139,91 @@ public class LiuyinPlayer {
         });
         playerCreated = true;
         registerForeignPlaybackMonitor(player);
+        registerNoisyHandling(player);
         return player;
+    }
+
+    /**
+     * 音频输出设备变更处理：
+     * - 拔出耳机/蓝牙断开（ACTION_AUDIO_BECOMING_NOISY）：正在播放则暂停，并记录 pausedByNoisy
+     * - 耳机/蓝牙耳机重新连接：此前因断开而暂停则自动续播
+     * 用户主动 play/pause/load/stop 会清除 pausedByNoisy，避免陈旧标记导致意外续播。
+     */
+    private void registerNoisyHandling(ExoPlayer p) {
+        // ExoPlayer 绑定在创建它的线程，广播/设备回调在主线程执行，
+        // 必须 post 回播放器 looper，否则抛 "wrong thread" 崩溃
+        final Handler playerHandler = new Handler(p.getApplicationLooper());
+        try {
+            androidx.core.content.ContextCompat.registerReceiver(appContext, new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    playerHandler.post(() -> {
+                        if (player == null || !player.isPlaying()) return;
+                        pausedByNoisy = true;
+                        player.pause();
+                    });
+                }
+            }, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);
+        } catch (Throwable t) {
+            android.util.Log.w("LiuyinPlayer", "noisy receiver register failed", t);
+        }
+
+        AudioManager am = (AudioManager) appContext.getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) return;
+        try {
+            am.registerAudioDeviceCallback(new AudioDeviceCallback() {
+                private boolean isHeadlike(AudioDeviceInfo d) {
+                    switch (d.getType()) {
+                        case AudioDeviceInfo.TYPE_WIRED_HEADSET:
+                        case AudioDeviceInfo.TYPE_WIRED_HEADPHONES:
+                        case AudioDeviceInfo.TYPE_BLUETOOTH_A2DP:
+                        case AudioDeviceInfo.TYPE_BLE_HEADSET:
+                        case AudioDeviceInfo.TYPE_USB_HEADSET:
+                            return true;
+                        default:
+                            return false;
+                    }
+                }
+
+                @Override
+                public void onAudioDevicesAdded(AudioDeviceInfo[] addedDevices) {
+                    if (!pausedByNoisy) return;
+                    boolean reconnected = false;
+                    for (AudioDeviceInfo d : addedDevices) {
+                        if (isHeadlike(d)) { reconnected = true; break; }
+                    }
+                    if (!reconnected) return;
+                    // 不在主线程提前清标记：在播放器线程内检查并清除，
+                    // 避免与用户主动 play/pause（同样在播放器线程）产生竞态
+                    playerHandler.post(() -> {
+                        if (player == null || !pausedByNoisy) return;
+                        pausedByNoisy = false;
+                        int state = player.getPlaybackState();
+                        if (state == Player.STATE_READY || state == Player.STATE_BUFFERING) {
+                            lastPlayWhenReady = true;
+                            player.play();
+                        }
+                    });
+                }
+
+                @Override
+                public void onAudioDevicesRemoved(AudioDeviceInfo[] removedDevices) {
+                    // 兜底：部分 ROM 不派发 becoming-noisy 或派发晚，设备移除时再兜一层
+                    boolean headRemoved = false;
+                    for (AudioDeviceInfo d : removedDevices) {
+                        if (isHeadlike(d)) { headRemoved = true; break; }
+                    }
+                    if (!headRemoved) return;
+                    playerHandler.post(() -> {
+                        if (player == null || !player.isPlaying()) return;
+                        pausedByNoisy = true;
+                        player.pause();
+                    });
+                }
+            }, null);
+        } catch (Throwable t) {
+            android.util.Log.w("LiuyinPlayer", "audio device callback register failed", t);
+        }
     }
 
     /** 监听导航/语音播报；部分 ROM 只在系统混音层压低音乐，不派发音频焦点回调。 */
@@ -319,6 +410,7 @@ public class LiuyinPlayer {
             p.prepare();
             if (positionMs > 0) p.seekTo((long) positionMs);
             lastPlayWhenReady = true;
+            pausedByNoisy = false;
             p.play();
             saveLastTrack();
         } catch (Throwable t) {
@@ -329,17 +421,21 @@ public class LiuyinPlayer {
     public void play() {
         disarmEndedWatchdog();
         lastPlayWhenReady = true;
+        pausedByNoisy = false;
+        saveLastTrack();
         ensurePlayer().play();
     }
 
     public void pause() {
         disarmEndedWatchdog();
+        pausedByNoisy = false;
         saveLastTrack();
         ensurePlayer().pause();
     }
 
     public void stop() {
         disarmEndedWatchdog();
+        pausedByNoisy = false;
         saveLastTrack();
         ensurePlayer().stop();
     }
@@ -423,6 +519,7 @@ public class LiuyinPlayer {
      */
     public boolean handleColdMediaButton(String command) {
         try {
+            pausedByNoisy = false;
             if (playerCreated && player != null && player.getCurrentMediaItem() != null) {
                 switch (command) {
                     case "pause":
