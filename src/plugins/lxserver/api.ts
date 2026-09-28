@@ -95,7 +95,7 @@ export interface MusicUrlResult {
 // 音乐链接解析（照抄 Web 播放器 fetchSongUrl 的核心通道）：
 // POST /api/music/url，服务端对该平台的所有自定义源逐个尝试（多源轮询），
 // 并携带完整 songInfo（meta.strMediaMid/hash/copyrightId 等由服务端展开）。
-export const getMusicUrl = async(songInfo: any, quality: string): Promise<MusicUrlResult> => {
+export const getMusicUrl = async(songInfo: any, quality: string, excludeApiSources?: string[]): Promise<MusicUrlResult> => {
   const url = `${getBaseUrl()}/api/music/url`
   const doRequest = async() => {
     const response = await fetchWithTimeout(url, {
@@ -108,6 +108,8 @@ export const getMusicUrl = async(songInfo: any, quality: string): Promise<MusicU
         songInfo,
         quality,
         enableAutoSwitchApiSource: true,
+        // 已确认失效的音源在后续请求中排除，避免反复在坏源上超时/重试
+        ...(excludeApiSources && excludeApiSources.length ? { excludeApiSources } : {}),
       }),
     })
     if (!response.ok) {

@@ -44,6 +44,30 @@ const probeResolvedUrl = async(url: string, filename: string): Promise<string | 
 // 只有 DNS/连接挂起才吃满超时——过长的超时会把播放卡在“获取链接中”。
 const PROBE_TIMEOUT = 2000
 
+// 失效音源短期黑名单（会话级）：实测存在“所选音源排序靠前的源已挂（链接 400/超时/SSL 失败），
+// 可用源排在最后”的情况，每次解析都要逐个踩坑（秒级到十几秒）。
+// 客户端记住已探测失败的音源，在后续请求中传给服务端排除（excludeApiSources），
+// 最快收敛到可用源；5 分钟后失效，给音源恢复的机会。
+const FAILED_SOURCE_TTL_MS = 5 * 60 * 1000
+// 最多同时排除 3 个，保证仍有候选源可试
+const MAX_FAILED_SOURCES = 3
+const failedSourceBlacklist = new Map<string, number>()
+const getActiveFailedSources = (): string[] => {
+  const now = Date.now()
+  for (const [name, expireAt] of failedSourceBlacklist) {
+    if (expireAt <= now) failedSourceBlacklist.delete(name)
+  }
+  return [...failedSourceBlacklist.keys()]
+}
+const markSourceFailed = (name?: string) => {
+  if (!name) return
+  failedSourceBlacklist.set(name, Date.now() + FAILED_SOURCE_TTL_MS)
+  if (failedSourceBlacklist.size > MAX_FAILED_SOURCES) {
+    const oldest = [...failedSourceBlacklist.entries()].sort((a, b) => a[1] - b[1])[0]
+    if (oldest) failedSourceBlacklist.delete(oldest[0])
+  }
+}
+
 export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSource = true, onToggleSource = () => {} }: {
   musicInfo: LX.Music.MusicInfoOnline
   quality?: LX.Quality
@@ -57,6 +81,8 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
 
   let lastError: any = null
   const filename = `${musicInfo.singer} - ${musicInfo.name}.mp3`
+  // 本次解析已确认失效的音源（含会话级黑名单），随请求传给服务端排除
+  const failedSources = getActiveFailedSources()
 
   // 1. 内部 API 多源轮询（照抄 Web 播放器 fetchSongUrl → POST /api/music/url）。
   //    服务端拿到完整 songInfo 后对该平台所有自定义源逐个尝试（enableAutoSwitchApiSource），
@@ -65,11 +91,17 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
   //    失败时按 Web 播放器的音质降级逻辑逐级重试。
   for (const q of getQualityChain(targetQuality)) {
     try {
-      const result = await lxApi.getMusicUrl(musicInfo, q)
+      const result = await lxApi.getMusicUrl(musicInfo, q, failedSources)
       const usableUrl = await probeResolvedUrl(result.url, filename)
       if (usableUrl) {
         void saveMusicUrl(musicInfo, targetQuality, usableUrl)
         return usableUrl
+      }
+      // 探测失败（链接不可达）：把该音源计入黑名单，后续请求直接排除，
+      // 避免下一轮降级/换源时又在同一坏源上白等
+      markSourceFailed(result.sourceName)
+      if (result.sourceName && !failedSources.includes(result.sourceName)) {
+        failedSources.push(result.sourceName)
       }
       // 探测失败（链接不可达）：若服务端已无其它音源可尝试，换音质只会得到同一来源的
       // 同一链接，继续降级只是白等一轮解析+探测——直接进入跨平台换源/Subsonic 兜底。
@@ -90,12 +122,13 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
       if (matched) {
         onToggleSource(matched)
         const bestQuality = getBestMatchQuality(matched, targetQuality)
-        const result = await lxApi.getMusicUrl(matched, bestQuality)
+        const result = await lxApi.getMusicUrl(matched, bestQuality, failedSources)
         const usableUrl = await probeResolvedUrl(result.url, filename)
         if (usableUrl) {
           void saveMusicUrl(musicInfo, targetQuality, usableUrl)
           return usableUrl
         }
+        markSourceFailed(result.sourceName)
       }
     } catch (err) {
       lastError = err
