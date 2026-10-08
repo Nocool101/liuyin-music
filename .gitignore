@@ -29,6 +29,15 @@ build/
 .gradle
 local.properties
 keystore.properties
+
+# 签名文件与本地签名配置一律不入库
+# 正式 Release 签名通过 Gradle 属性 -P 或 CI Secret 注入（见 scripts/release-gate.mjs）
+*.jks
+*.keystore
+*.p12
+*.pepk
+signing.properties
+*.keystore.properties
 *.iml
 *.hprof
 .cxx/
@@ -43,7 +52,8 @@ yarn-error.log
 buck-out/
 \.buckd/
 *.keystore
-!debug.keystore
+# 不再把 debug.keystore 入库：Release 已改为强制注入正式签名，
+# debug 构建由 AGP 自动生成 ~/.android/debug.keystore，无需提交。
 
 # fastlane
 #
