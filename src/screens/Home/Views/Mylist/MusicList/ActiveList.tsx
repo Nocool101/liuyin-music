@@ -17,12 +17,13 @@ import { useSettingValue } from '@/store/setting/hook'
 export interface ActiveListProps {
   onShowSearchBar: () => void
   onScrollToTop: () => void
+  onLocateCurrent: () => void
 }
 export interface ActiveListType {
   setVisibleBar: (visible: boolean) => void
 }
 
-export default forwardRef<ActiveListType, ActiveListProps>(({ onShowSearchBar, onScrollToTop }, ref) => {
+export default forwardRef<ActiveListType, ActiveListProps>(({ onShowSearchBar, onScrollToTop, onLocateCurrent }, ref) => {
   const theme = useTheme()
   const currentListId = useActiveListId()
   const fetching = useListFetching(currentListId)
@@ -65,6 +66,9 @@ export default forwardRef<ActiveListType, ActiveListProps>(({ onShowSearchBar, o
       <Icon style={styles.currentListIcon} color={theme['c-button-font']} name="chevron-right" size={12} />
       { fetching ? <Loading color={theme['c-button-font']} style={styles.loading} /> : null }
       <Text style={styles.currentListText} numberOfLines={1} color={theme['c-button-font']}>{currentListName}</Text>
+      <TouchableOpacity style={styles.currentListBtns} onPress={onLocateCurrent}>
+        <Icon color={theme['c-button-font']} name="play-outline" />
+      </TouchableOpacity>
       <TouchableOpacity style={styles.currentListBtns} onPress={onShowSearchBar}>
         <Icon color={theme['c-button-font']} name="search-2" />
       </TouchableOpacity>
@@ -85,8 +89,6 @@ const styles = createStyle({
   currentListIcon: {
     paddingLeft: 15,
     paddingRight: 10,
-    // paddingTop: 10,
-    // paddingBottom: 0,
   },
   currentListText: {
     flex: 1,
@@ -100,7 +102,7 @@ const styles = createStyle({
     marginRight: 5,
   },
   currentListBtns: {
-    width: 46,
+    width: 42,
     justifyContent: 'center',
     alignItems: 'center',
     height: '100%',

@@ -29,10 +29,13 @@ export const markLocalFavoriteWrite = () => {
   lastLocalWriteAt = Date.now()
 }
 
-const listsEqual = (a: LX.Music.MusicInfo[], b: LX.Music.MusicInfo[]) => {
+/** 按歌曲ID集合比较（忽略顺序）：手动排序是本地偏好，不应被服务器顺序覆盖 */
+const sameMusicIds = (a: LX.Music.MusicInfo[], b: LX.Music.MusicInfo[]) => {
   if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    if (a[i].id !== b[i].id) return false
+  if (!a.length) return true
+  const ids = new Set(b.map(m => m.id))
+  for (const item of a) {
+    if (!ids.has(item.id)) return false
   }
   return true
 }
@@ -50,7 +53,7 @@ export const syncFavorites = async(): Promise<void> => {
 
     const loveSongs = loveList.map(lxServerJsonToMusicInfo)
     const currentLove = await getListMusics(LIST_IDS.LOVE)
-    if (!listsEqual(currentLove, loveSongs)) {
+    if (!sameMusicIds(currentLove, loveSongs)) {
       if (lastLocalWriteAt > syncStartedAt) return
       state.favoriteIds = new Set(loveSongs.map(s => s.id))
       // 服务器列表覆盖标记为远程变更，避免播放中的搜索歌曲被误判成用户删除。
@@ -59,7 +62,7 @@ export const syncFavorites = async(): Promise<void> => {
 
     const defaultSongs = defaultList.map(lxServerJsonToMusicInfo)
     const currentDefault = await getListMusics(LIST_IDS.DEFAULT)
-    if (!listsEqual(currentDefault, defaultSongs)) {
+    if (!sameMusicIds(currentDefault, defaultSongs)) {
       if (lastLocalWriteAt > syncStartedAt) return
       await overwriteListMusics(LIST_IDS.DEFAULT, defaultSongs, true)
     }
@@ -87,7 +90,11 @@ export const loadFavorites = async(): Promise<void> => {
     const { loveList } = await lxApi.getUserList()
     const songs = loveList.map(lxServerJsonToMusicInfo)
 
+    // 仅歌曲ID集合有变化时才覆盖：本地手动排序（顺序偏好）在冷启动后仍保留
+    const currentLove = await getListMusics(LIST_IDS.LOVE)
+    const isSameIds = sameMusicIds(currentLove, songs)
     state.favoriteIds = new Set(songs.map(s => s.id))
+    if (isSameIds) return
 
     // 服务器拉取覆盖标记为远程变更，避免误触发播放列表自动切歌。
     await overwriteListMusics(LIST_IDS.LOVE, songs, true)

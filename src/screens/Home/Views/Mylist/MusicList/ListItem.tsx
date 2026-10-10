@@ -1,5 +1,5 @@
 import { memo, useRef } from 'react'
-import { View, TouchableOpacity } from 'react-native'
+import { PanResponder, View, TouchableOpacity, type GestureResponderEvent } from 'react-native'
 import { LIST_ITEM_HEIGHT } from '@/config/constant'
 // import { BorderWidths } from '@/theme'
 import { Icon } from '@/components/common/Icon'
@@ -12,18 +12,21 @@ import Badge from '@/components/common/Badge'
 
 export const ITEM_HEIGHT = scaleSizeH(LIST_ITEM_HEIGHT)
 
-
-export default memo(({ item, index, activeIndex, onPress, onShowMenu, onLongPress, selectedList, rowInfo, isShowAlbumName, isShowInterval }: {
+export default memo(({ item, index, activeIndex, onPress, onLongPressDrag, onShowMenu, selectedList, rowInfo, isShowAlbumName, isShowInterval, isDragging, isOverlay, onDragMove, onDragEnd }: {
   item: LX.Music.MusicInfo
   index: number
   activeIndex: number
   onPress: (item: LX.Music.MusicInfo, index: number) => void
-  onLongPress: (item: LX.Music.MusicInfo, index: number) => void
+  onLongPressDrag: (index: number, pageX: number, pageY: number, locX: number, locY: number) => void
   onShowMenu: (item: LX.Music.MusicInfo, index: number, position: { x: number, y: number, w: number, h: number }) => void
   selectedList: LX.Music.MusicInfo[]
   rowInfo: RowInfo
   isShowAlbumName: boolean
   isShowInterval: boolean
+  isDragging?: boolean
+  isOverlay?: boolean
+  onDragMove?: (dx: number, dy: number) => void
+  onDragEnd?: () => void
 }) => {
   const theme = useTheme()
 
@@ -31,6 +34,35 @@ export default memo(({ item, index, activeIndex, onPress, onShowMenu, onLongPres
   // console.log(item.name, selectedList, selectedList.includes(item))
   const isSupported = useAssertApiSupport(item.source)
   const moreButtonRef = useRef<TouchableOpacity>(null)
+  // 供 PanResponder 回调读取最新 index（PanResponder 仅创建一次，闭包会过期）
+  const latestRef = useRef({ index })
+  latestRef.current = { index }
+  // 'none' 未拖拽 | 'pending' 已长按待拖动 | 'dragging' 已接管手势拖动中
+  const dragStateRef = useRef<'none' | 'pending' | 'dragging'>('none')
+  const dragPanResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    // 长按生效后再接管手势：随手指拖动排序；未长按则让位给点击与列表滚动
+    onMoveShouldSetPanResponder: (_evt, gestureState) => {
+      return dragStateRef.current == 'pending' && (Math.abs(gestureState.dy) > 2 || Math.abs(gestureState.dx) > 2)
+    },
+    onPanResponderGrant: (_evt, gestureState) => {
+      dragStateRef.current = 'dragging'
+      // 同步到当前手指增量（长按到首次移动间手指可能已偏移）
+      onDragMove?.(gestureState.dx, gestureState.dy)
+    },
+    onPanResponderMove: (_evt, gestureState) => {
+      onDragMove?.(gestureState.dx, gestureState.dy)
+    },
+    onPanResponderRelease: () => {
+      dragStateRef.current = 'none'
+      onDragEnd?.()
+    },
+    onPanResponderTerminate: () => {
+      dragStateRef.current = 'none'
+      onDragEnd?.()
+    },
+  })).current
+
   const handleShowMenu = () => {
     if (moreButtonRef.current?.measure) {
       moreButtonRef.current.measure((fx, fy, width, height, px, py) => {
@@ -39,13 +71,39 @@ export default memo(({ item, index, activeIndex, onPress, onShowMenu, onLongPres
       })
     }
   }
+  const handleLongPress = (event: GestureResponderEvent) => {
+    if (dragStateRef.current != 'none') return
+    dragStateRef.current = 'pending'
+    // 长按即开始拖拽：歌曲悬浮，不松手即可拖动
+    onLongPressDrag(latestRef.current.index, event.nativeEvent.pageX, event.nativeEvent.pageY, event.nativeEvent.locationX, event.nativeEvent.locationY)
+  }
+  const handlePressOut = () => {
+    // 长按后未拖动（PanResponder 未接管）即松手：取消拖拽
+    if (dragStateRef.current != 'pending') return
+    dragStateRef.current = 'none'
+    onDragEnd?.()
+  }
   const active = activeIndex == index
 
   const singer = `${item.singer}${isShowAlbumName && item.meta.albumName ? ` · ${item.meta.albumName}` : ''}`
 
   return (
-    <View style={{ ...styles.listItem, width: rowInfo.rowWidth, height: ITEM_HEIGHT, backgroundColor: isSelected ? theme['c-primary-background-hover'] : 'rgba(0,0,0,0)', opacity: isSupported ? 1 : 0.5 }}>
-      <TouchableOpacity style={styles.listItemLeft} onPress={() => { onPress(item, index) }} onLongPress={() => { onLongPress(item, index) }}>
+    <View {...dragPanResponder.panHandlers} style={{
+      ...styles.listItem,
+      width: rowInfo.rowWidth,
+      height: ITEM_HEIGHT,
+      backgroundColor: isOverlay ? theme['c-content-background'] : (isSelected ? theme['c-primary-background-hover'] : 'rgba(0,0,0,0)'),
+      opacity: !isSupported ? 0.5 : (isDragging && !isOverlay ? 0 : 1),
+      ...(isOverlay ? {
+        zIndex: 100,
+        elevation: 8,
+        shadowColor: '#000',
+        shadowOpacity: 0.3,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 3 },
+      } : null),
+    }}>
+      <TouchableOpacity style={styles.listItemLeft} onPress={() => { onPress(item, index) }} onLongPress={handleLongPress} onPressOut={handlePressOut}>
         {
           active
             ? <Icon style={styles.sn} name="play-outline" size={13} color={theme['c-primary-font']} />
@@ -82,7 +140,9 @@ export default memo(({ item, index, activeIndex, onPress, onShowMenu, onLongPres
     prevProps.isShowInterval === nextProps.isShowInterval &&
     prevProps.activeIndex != nextProps.index &&
     nextProps.activeIndex != nextProps.index &&
-    nextProps.selectedList.includes(nextProps.item) == prevProps.selectedList.includes(nextProps.item)
+    nextProps.selectedList.includes(nextProps.item) == prevProps.selectedList.includes(nextProps.item) &&
+    prevProps.isDragging == nextProps.isDragging &&
+    prevProps.isOverlay == nextProps.isOverlay
   )
 })
 

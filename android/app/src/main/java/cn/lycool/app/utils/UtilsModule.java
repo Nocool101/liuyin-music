@@ -4,12 +4,17 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.Manifest;
+import android.net.Uri;
 import android.os.Build;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.util.DisplayMetrics;
 import android.view.View;
 import android.view.WindowManager;
 
 import androidx.core.app.NotificationManagerCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
@@ -20,10 +25,13 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
+import com.facebook.react.modules.core.PermissionAwareActivity;
 
 import java.util.Locale;
 
 public class UtilsModule extends ReactContextBaseJavaModule {
+
+  private static final int REQUEST_CODE_NOTIFICATION = 1001;
 
   public UtilsModule(ReactApplicationContext reactContext) {
     super(reactContext);
@@ -97,7 +105,50 @@ public class UtilsModule extends ReactContextBaseJavaModule {
 
   @ReactMethod
   public void openNotificationPermissionActivity(Promise promise) {
-    promise.resolve(true);
+    Activity activity = getCurrentActivity();
+    if (activity == null) {
+      promise.resolve(false);
+      return;
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      // Android 13+：已授权则直接返回；否则弹系统运行时权限对话框，用户点"允许"即授权
+      if (ContextCompat.checkSelfPermission(getReactApplicationContext(), Manifest.permission.POST_NOTIFICATIONS)
+          == PackageManager.PERMISSION_GRANTED) {
+        promise.resolve(true);
+        return;
+      }
+      if (!(activity instanceof PermissionAwareActivity)) {
+        promise.resolve(false);
+        return;
+      }
+      final PermissionAwareActivity awareActivity = (PermissionAwareActivity) activity;
+      activity.runOnUiThread(() -> {
+        try {
+          awareActivity.requestPermissions(
+            new String[] { Manifest.permission.POST_NOTIFICATIONS },
+            REQUEST_CODE_NOTIFICATION,
+            (requestCode, permissions, grantResults) -> {
+              boolean granted = grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+              promise.resolve(granted);
+              return true;
+            }
+          );
+        } catch (Exception e) {
+          promise.resolve(false);
+        }
+      });
+    } else {
+      // Android 13 以下通知默认开启；若被禁用则打开系统通知设置页（resolve null 表示走设置页，JS 等待回前台再检测）
+      try {
+        Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+        intent.putExtra(Settings.EXTRA_APP_PACKAGE, getReactApplicationContext().getPackageName());
+        activity.startActivity(intent);
+        promise.resolve(null);
+      } catch (Exception e) {
+        promise.resolve(null);
+      }
+    }
   }
 
   @ReactMethod
@@ -173,12 +224,46 @@ public class UtilsModule extends ReactContextBaseJavaModule {
 
   @ReactMethod
   public void isIgnoringBatteryOptimization(Promise promise) {
-    promise.resolve(true);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      PowerManager pm = (PowerManager) getReactApplicationContext().getSystemService(Context.POWER_SERVICE);
+      if (pm == null) {
+        promise.resolve(true);
+        return;
+      }
+      promise.resolve(pm.isIgnoringBatteryOptimizations(getReactApplicationContext().getPackageName()));
+    } else {
+      promise.resolve(true);
+    }
   }
 
   @ReactMethod
   public void requestIgnoreBatteryOptimization(Promise promise) {
-    promise.resolve(true);
+    Activity activity = getCurrentActivity();
+    if (activity == null) {
+      promise.resolve(false);
+      return;
+    }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+      promise.resolve(true);
+      return;
+    }
+    activity.runOnUiThread(() -> {
+      try {
+        // 直接弹系统对话框，用户点"允许"即生效，无需进设置
+        Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+        intent.setData(Uri.parse("package:" + getReactApplicationContext().getPackageName()));
+        activity.startActivity(intent);
+        promise.resolve(true);
+      } catch (Exception e) {
+        try {
+          // 部分 ROM 没有该页面，回退到电池优化列表页
+          activity.startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+          promise.resolve(true);
+        } catch (Exception e2) {
+          promise.resolve(false);
+        }
+      }
+    });
   }
 
   @ReactMethod

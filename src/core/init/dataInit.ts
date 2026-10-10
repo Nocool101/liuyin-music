@@ -11,6 +11,7 @@ import { TEMP_FILE_PATH } from '@/utils/tools'
 import { loadServerConfigs, loadActiveServerId } from '@/plugins/lxserver'
 import { setConfigs, setActiveConfig, setConnected } from '@/store/server/action'
 import { loadFavorites, startFavoritesSync } from '@/core/favorites'
+import { requestFirstLaunchPermissions } from './permissions'
 // import { play, playList } from '../player/player'
 
 // const initPrevPlayInfo = async(appSetting: LX.AppSetting) => {
@@ -52,5 +53,7 @@ export default async(appSetting: LX.AppSetting) => {
     }
   }
   bootLog('Server config inited.')
+  // 新安装用户首次启动：依次弹出系统权限申请（通知/存储/忽略电池优化），点允许即授权
+  void requestFirstLaunchPermissions()
   // await initPrevPlayInfo(appSetting).catch(err => log.error(err)) // 初始化上次的歌曲播放信息
 }

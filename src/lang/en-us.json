@@ -98,6 +98,7 @@
   "list_multi_add_title_first_add": "Add the selected",
   "list_multi_add_title_first_move": "Move the selected",
   "list_multi_add_title_last": "songs to ...",
+  "list_locate_empty": "No song is currently playing",
   "list_name_default": "Default",
   "list_name_love": "Loved",
   "list_name_temp": "Temp List",

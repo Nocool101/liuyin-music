@@ -60,6 +60,7 @@ export const storageDataPrefix = {
   selectedManagedFolder: '@selected_managed_folder',
   notificationTipEnable: '@notification_tip_enable',
   ignoringBatteryOptimizationTipEnable: '@ignoring_battery_optimization_tip_enable',
+  firstLaunchPermissionsDone: '@first_launch_permissions_done',
 
   searchHistoryList: '@search_history_list',
   listUpdateInfo: '@list_update_info',

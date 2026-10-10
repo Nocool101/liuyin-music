@@ -245,6 +245,9 @@ export const clipboardWriteText = (str: string) => {
 export const checkNotificationPermission = async() => {
   const isHide = await getData(storageDataPrefix.notificationTipEnable)
   if (isHide != null) return
+  // 首次启动已弹过系统权限申请（用户已做过选择），不再用应用内提醒打扰
+  const firstLaunchDone = await getData(storageDataPrefix.firstLaunchPermissionsDone)
+  if (firstLaunchDone != null) return
   const enabled = await isNotificationsEnabled()
   if (enabled) return
   return new Promise<void>((resolve) => {

@@ -7,7 +7,7 @@ import { playListById } from '@/core/player/player'
 import List, { type ListType } from './List'
 import ListMusicAdd, { type MusicAddModalType as ListMusicAddType } from '@/components/MusicAddModal'
 import ListMusicMultiAdd, { type MusicMultiAddModalType as ListAddMultiType } from '@/components/MusicMultiAddModal'
-import { createStyle } from '@/utils/tools'
+import { createStyle, toast } from '@/utils/tools'
 import { type LayoutChangeEvent, View } from 'react-native'
 import ActiveList, { type ActiveListType } from './ActiveList'
 import MultipleModeBar, { type SelectMode, type MultipleModeBarType } from './MultipleModeBar'
@@ -41,14 +41,6 @@ export default () => {
   const selectedInfoRef = useRef<SelectInfo>()
   // console.log('render index list')
 
-  const hancelMultiSelect = useCallback(() => {
-    if (isShowSearchBarModeBar.current) {
-      multipleModeBarRef.current?.setVisibleBar(false)
-    } else activeListRef.current?.setVisibleBar(false)
-    isShowMultipleModeBar.current = true
-    multipleModeBarRef.current?.show()
-    listRef.current?.setIsMultiSelectMode(true)
-  }, [])
   const hancelExitSelect = useCallback(() => {
     if (isShowSearchBarModeBar.current) {
       multipleModeBarRef.current?.setVisibleBar(true)
@@ -64,6 +56,12 @@ export default () => {
   }, [])
   const hancelScrollToTop = useCallback(() => {
     listRef.current?.scrollToTop()
+  }, [])
+  const hancelLocateCurrent = useCallback(() => {
+    // 定位当前播放歌曲；没有播放中的歌曲时提示
+    if (!listRef.current?.scrollToCurrent()) {
+      toast(global.i18n.t('list_locate_empty'))
+    }
   }, [])
 
   const showMenu = useCallback((musicInfo: LX.Music.MusicInfo, index: number, position: Position) => {
@@ -86,7 +84,7 @@ export default () => {
     isShowSearchBarModeBar.current = false
     listMusicSearchRef.current?.hide()
     listSearchBarRef.current?.hide()
-    // console.log('handleExitSearch', isShowMultipleModeBar.current)
+    // console.log('handleExitSearch', isShowSearchBarModeBar.current)
     if (isShowMultipleModeBar.current) {
       multipleModeBarRef.current?.setVisibleBar(true)
     } else activeListRef.current?.setVisibleBar(true)
@@ -127,7 +125,7 @@ export default () => {
   return (
     <View style={styles.container}>
       <View style={{ zIndex: 2 }}>
-        <ActiveList ref={activeListRef} onShowSearchBar={handleShowSearch} onScrollToTop={hancelScrollToTop} />
+        <ActiveList ref={activeListRef} onShowSearchBar={handleShowSearch} onScrollToTop={hancelScrollToTop} onLocateCurrent={hancelLocateCurrent} />
         <MultipleModeBar
           ref={multipleModeBarRef}
           onSwitchMode={hancelSwitchSelectMode}
@@ -144,7 +142,6 @@ export default () => {
         <List
           ref={listRef}
           onShowMenu={showMenu}
-          onMuiltSelectMode={hancelMultiSelect}
           onSelectAll={isAll => multipleModeBarRef.current?.setIsSelectAll(isAll)}
         />
         <ListMusicSearch

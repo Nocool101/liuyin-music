@@ -17,6 +17,11 @@ import {
 // 音质降级链（照抄 Web 播放器 QUALITY_PRIORITY，从目标音质向下降级）
 const QUALITY_DEGRADE_CHAIN: LX.Quality[] = ['flac24bit', 'flac', '320k', '192k', '128k']
 
+// QQ 音乐加密格式（mgg 歌曲 / qrc 歌词）：文件能下载（探测会通过）但播放器无法解码，
+// 必须视为解析失败，让上层继续跨平台换源/Subsonic 兜底，否则用户只会看到"url过期"
+const ENCRYPTED_URL_RE = /\.(mgg|qrc)(\?|#|$)/i
+const isEncryptedUrl = (url: string) => ENCRYPTED_URL_RE.test(url)
+
 const getQualityChain = (target: LX.Quality): LX.Quality[] => {
   const index = QUALITY_DEGRADE_CHAIN.indexOf(target)
   if (index === -1) return [target]
@@ -77,7 +82,7 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
 }): Promise<string> => {
   const targetQuality = quality ?? getPlayQuality(settingState.setting['player.playQuality'], musicInfo)
   const cachedUrl = await getStoreMusicUrl(musicInfo, targetQuality)
-  if (cachedUrl && !isRefresh) return cachedUrl
+  if (cachedUrl && !isRefresh && !isEncryptedUrl(cachedUrl)) return cachedUrl
 
   let lastError: any = null
   const filename = `${musicInfo.singer} - ${musicInfo.name}.mp3`
@@ -92,6 +97,15 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
   for (const q of getQualityChain(targetQuality)) {
     try {
       const result = await lxApi.getMusicUrl(musicInfo, q, failedSources)
+      if (isEncryptedUrl(result.url)) {
+        // 加密格式（如 tx 的 mgg）：计入黑名单，继续降级/换源
+        markSourceFailed(result.sourceName)
+        if (result.sourceName && !failedSources.includes(result.sourceName)) {
+          failedSources.push(result.sourceName)
+        }
+        if (result.hasMoreSources === false) break
+        continue
+      }
       const usableUrl = await probeResolvedUrl(result.url, filename)
       if (usableUrl) {
         void saveMusicUrl(musicInfo, targetQuality, usableUrl)
@@ -109,7 +123,6 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
       if (result.hasMoreSources === false) break
     } catch (err) {
       lastError = err
-      console.log(`Internal API music URL failed for ${musicInfo.id} (${q}):`, err?.message ?? err)
     }
   }
 
@@ -122,17 +135,22 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
       if (matched) {
         onToggleSource(matched)
         const bestQuality = getBestMatchQuality(matched, targetQuality)
-        const result = await lxApi.getMusicUrl(matched, bestQuality, failedSources)
-        const usableUrl = await probeResolvedUrl(result.url, filename)
-        if (usableUrl) {
-          void saveMusicUrl(musicInfo, targetQuality, usableUrl)
-          return usableUrl
+        // 不传原平台黑名单：音源名跨平台复用（同一脚本可同时服务 tx/kw），
+        // 原平台的坏源排除会误杀目标平台唯一源
+        const result = await lxApi.getMusicUrl(matched, bestQuality)
+        if (isEncryptedUrl(result.url)) {
+          markSourceFailed(result.sourceName)
+        } else {
+          const usableUrl = await probeResolvedUrl(result.url, filename)
+          if (usableUrl) {
+            void saveMusicUrl(musicInfo, targetQuality, usableUrl)
+            return usableUrl
+          }
+          markSourceFailed(result.sourceName)
         }
-        markSourceFailed(result.sourceName)
       }
     } catch (err) {
       lastError = err
-      console.log('Cross-source fallback failed:', err?.message ?? err)
     }
   }
 
@@ -140,11 +158,11 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
   try {
     const maxBitRate = getMaxBitRate(targetQuality)
     const url = subsonic.getStreamUrl(musicInfo.id, maxBitRate)
-    void saveMusicUrl(musicInfo, targetQuality, url)
+    // 不写入 URL 缓存：该链接未经探测，对解析不了的歌曲是死链，
+    // 缓存会毒害后续 2 小时内的播放（直接返回死链不再重试）
     return url
   } catch (err) {
     lastError = err
-    console.log('Subsonic stream failed, trying internal API:', err)
   }
 
   throw lastError ?? new Error('Failed to get music URL')

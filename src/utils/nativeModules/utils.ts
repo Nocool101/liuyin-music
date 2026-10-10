@@ -56,10 +56,13 @@ export const requestNotificationPermission = async() => new Promise<boolean>((re
       void isNotificationsEnabled().then(resolve)
     }, 1000)
   })
-  UtilsModule.openNotificationPermissionActivity().then((result: boolean) => {
-    if (result) return
-    subscription.remove()
-    resolve(false)
+  UtilsModule.openNotificationPermissionActivity().then((result) => {
+    // 系统弹窗路径：原生直接返回授权结果
+    if (result != null) {
+      subscription.remove()
+      resolve(!!result)
+    }
+    // result 为 null：打开的是系统设置页，等用户回前台后由 AppState 回调重新检测
   })
 })
 
