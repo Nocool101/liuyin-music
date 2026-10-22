@@ -50,13 +50,15 @@ export const initMediaBridge = () => {
       MediaBridge.start()
       const emitter = new NativeEventEmitter(MediaBridge)
       emitter.addListener('MediaBridgeCommand', handleCommand)
-      // 拉取监听器注册前原生排队中的锁屏命令，避免事件丢失
+      // 告知原生「JS 已就绪」并原子地取回此前排队的命令。
+      // 原生在此之前不会直接派发（事件会排队），避免监听器注册前的事件被静默丢弃；
+      // 由原生在同一次调用里完成「标记就绪 + 排空」，保证不丢也不重复。
       try {
-        MediaBridge.drainMediaCommands().then((cmds: { command: string, position: number }[]) => {
+        MediaBridge.setJsReady().then((cmds: { command: string, position: number }[]) => {
           for (const cmd of cmds ?? []) handleCommand(cmd)
-        }).catch((err: any) => console.log('drainMediaCommands failed:', err))
+        }).catch((err: any) => console.log('setJsReady failed:', err))
       } catch (err) {
-        console.log('drainMediaCommands error:', err)
+        console.log('setJsReady error:', err)
       }
     }
   } catch (err) {

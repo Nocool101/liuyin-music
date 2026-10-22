@@ -31,6 +31,19 @@ buildscript {
 apply plugin: "com.facebook.react.rootproject"
 
 allprojects {
+    // 子模块（如 @react-native-clipboard）各自声明的 buildscript 依赖会被
+    // 全局镜像配置顶掉，导致只搜索 gradle-plugin 镜像而找不到 Google Maven 的构件
+    // （com.android.tools.build:aapt2-proto 等）。这里为所有子项目的 buildscript
+    // 显式补齐仓库，保证构建可复现。
+    buildscript {
+        repositories {
+            maven { url 'https://maven.aliyun.com/repository/google' }
+            maven { url 'https://maven.aliyun.com/repository/central' }
+            maven { url 'https://maven.aliyun.com/repository/public' }
+            google()
+            mavenCentral()
+        }
+    }
     repositories {
         maven { url 'https://maven.aliyun.com/repository/google' }
         maven { url 'https://maven.aliyun.com/repository/central' }

@@ -26,6 +26,15 @@ public class MediaBridgeModule extends ReactContextBaseJavaModule {
     private static ReactApplicationContext sContext;
     private static final ArrayDeque<Command> pendingCommands = new ArrayDeque<>();
     private static final int MAX_PENDING_COMMANDS = 16;
+    /**
+     * JS 是否已经注册好命令监听。
+     * 原生模块是在 JS 首次访问 NativeModules 时才构造的，比 JS 注册监听器更早；
+     * 在这个窗口里 emit 出去的事件没有任何监听者，会被静默丢弃（表现为偶发“语音助手没反应”）。
+     * 因此以 JS 显式握手为准：握手之前一律入队，握手之后再直接派发。
+     */
+    private static volatile boolean jsReady = false;
+    /** 保护 pendingCommands 与 jsReady 的切换（媒体命令来自主线程，握手来自原生模块线程）。 */
+    private static final Object QUEUE_LOCK = new Object();
 
     private static final class Command {
         final String name;
@@ -46,16 +55,45 @@ public class MediaBridgeModule extends ReactContextBaseJavaModule {
         return NAME;
     }
 
-    /** JS 是否在运行（进程冷启动、JS 未加载时为 false，媒体按键走原生恢复播放） */
+    /**
+     * JS 是否可接收命令（进程冷启动、JS 未加载或监听器尚未注册时为 false，
+     * 此时媒体按键走原生恢复播放）。
+     */
     public static boolean hasContext() {
-        return sContext != null;
+        return sContext != null && jsReady;
+    }
+
+    /**
+     * JS 注册好命令监听后调用：原子地「标记就绪 + 取出排队命令」。
+     *
+     * 必须合并成一次调用——若先标记就绪再排空，两者之间到达的命令既不会被派发也不会被排空，
+     * 会被永久丢失；而排空后再标记就绪，同样会漏掉这一小段窗口内的命令。
+     * 在同一把锁内完成标记与排空，两种时序都不会丢、也不会重复处理。
+     */
+    @ReactMethod
+    public void setJsReady(Promise promise) {
+        try {
+            List<WritableMap> maps;
+            synchronized (QUEUE_LOCK) {
+                jsReady = true;
+                maps = new ArrayList<>();
+                while (!pendingCommands.isEmpty()) {
+                    maps.add(toMap(pendingCommands.removeFirst()));
+                }
+            }
+            if (!maps.isEmpty()) Log.i(TAG, "js ready, drained commands: " + maps.size());
+            else Log.i(TAG, "js ready");
+            promise.resolve(Arguments.makeNativeArray(maps));
+        } catch (Throwable t) {
+            promise.reject("SET_JS_READY_ERROR", t);
+        }
     }
 
     public static void emitCommand(String command, long positionMs) {
         Command cmd = new Command(command, positionMs);
         ReactApplicationContext ctx = sContext;
-        if (ctx == null) {
-            Log.w(TAG, "command queued (no react context): " + cmd.name);
+        if (ctx == null || !jsReady) {
+            Log.w(TAG, "command queued (js not ready): " + cmd.name);
             enqueue(cmd);
             return;
         }
@@ -70,8 +108,10 @@ public class MediaBridgeModule extends ReactContextBaseJavaModule {
     }
 
     private static void enqueue(Command cmd) {
-        if (pendingCommands.size() >= MAX_PENDING_COMMANDS) pendingCommands.removeFirst();
-        pendingCommands.addLast(cmd);
+        synchronized (QUEUE_LOCK) {
+            if (pendingCommands.size() >= MAX_PENDING_COMMANDS) pendingCommands.removeFirst();
+            pendingCommands.addLast(cmd);
+        }
     }
 
     private static WritableMap toMap(Command cmd) {
@@ -86,8 +126,10 @@ public class MediaBridgeModule extends ReactContextBaseJavaModule {
     public void drainMediaCommands(Promise promise) {
         try {
             List<WritableMap> maps = new ArrayList<>();
-            while (!pendingCommands.isEmpty()) {
-                maps.add(toMap(pendingCommands.removeFirst()));
+            synchronized (QUEUE_LOCK) {
+                while (!pendingCommands.isEmpty()) {
+                    maps.add(toMap(pendingCommands.removeFirst()));
+                }
             }
             if (!maps.isEmpty()) Log.i(TAG, "drained commands: " + maps.size());
             promise.resolve(com.facebook.react.bridge.Arguments.makeNativeArray(maps));
