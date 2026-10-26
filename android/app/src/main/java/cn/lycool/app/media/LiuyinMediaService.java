@@ -25,7 +25,8 @@ import cn.lycool.app.player.LiuyinPlayer;
 /**
  * Media3 MediaSessionService：让系统把应用识别为媒体播放器，
  * 提供锁屏媒体控件/通知栏媒体卡片（Media3 自动基于播放器生成）。
- * 上一曲/下一曲转发回 JS（切歌逻辑在 JS），播放/暂停/拖动由 MediaSession 直接控制播放器。
+ * 上一曲/下一曲/播放/暂停转发回 JS（切歌与播放状态逻辑在 JS，见 onPlayerCommandRequest）；
+ * 进度拖动（seek）放行给 Media3 直接在播放器上执行。
  */
 @UnstableApi
 public class LiuyinMediaService extends MediaSessionService {
@@ -218,19 +219,31 @@ public class LiuyinMediaService extends MediaSessionService {
                             case Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM:
                                 cn.lycool.app.media.MediaBridgeModule.emitCommand("prev", 0);
                                 return Player.COMMAND_INVALID;
+                            // —— seek 类命令：通知栏 / 锁屏 / 系统媒体卡片 / 语音助手拖动进度条 ——
+                            //
+                            // Media3 1.8.0 的 onPlayerCommandRequest 契约与直觉相反（字节码
+                            // MediaSessionStub.lambda$queueSessionTaskWithPlayerCommandForControllerInfo$14）：
+                            //   · 返回 0        → addToCommandQueue，由 SessionTask 调用
+                            //                     PlayerWrapper.seekTo(positionMs)，命令真正执行；
+                            //   · 返回非 0 的值  → 该值被当作 SessionResult 错误码发给控制器，
+                            //                     命令被静默丢弃。
+                            // 注意 Player.COMMAND_INVALID 的值是 -1（见 Player.Command），
+                            // 它表示「app 接管、Media3 不要执行」，并不是「放行」。
+                            //
+                            // seek 的目标位置（positionMs）只存在于 controller 侧，本回调签名
+                            // 拿不到，因此无法转交 JS，必须放行给 Media3 在播放器上执行。
+                            // （历史：曾分别按「原样返回 playerCommand」与「返回
+                            //  Player.COMMAND_INVALID」实现，两者均为非 0，导致音乐标签进度条
+                            //  拖动完全无效——framework MediaController 探针 + 真机实测证实。）
                             case Player.COMMAND_SEEK_TO_MEDIA_ITEM:
-                                return Player.COMMAND_SEEK_TO_MEDIA_ITEM;
                             case Player.COMMAND_SEEK_TO_DEFAULT_POSITION:
-                                return Player.COMMAND_SEEK_TO_DEFAULT_POSITION;
                             case Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM:
-                                return Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM;
                             case Player.COMMAND_SEEK_BACK:
-                                return Player.COMMAND_SEEK_BACK;
                             case Player.COMMAND_SEEK_FORWARD:
-                                return Player.COMMAND_SEEK_FORWARD;
+                                return 0;
                             default:
-                                // seek 等由 MediaSession 直接控制播放器
-                                return playerCommand;
+                                // 其余播放器命令（倍速/循环模式等）同样放行给 Media3 在播放器上执行
+                                return 0;
                         }
                     }
 
