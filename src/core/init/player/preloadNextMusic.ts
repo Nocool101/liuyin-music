@@ -3,6 +3,9 @@ import { getNextPlayMusicInfo, resetRandomNextMusicInfo } from '@/core/player/pl
 import { checkUrl } from '@/utils/request'
 import playerState from '@/store/player/state'
 import { isCached } from '@/plugins/player/utils'
+import { getMediaCacheKey, getPlayQuality } from '@/core/music/utils'
+import { saveMusicUrl } from '@/utils/data'
+import settingState from '@/store/setting/state'
 
 
 const preloadMusicInfo = {
@@ -25,10 +28,26 @@ const preloadNextMusicUrl = async(curTime: number) => {
     const url = await getMusicUrl({ musicInfo: info.musicInfo }).catch(() => '')
     if (url) {
       console.log('preload url', url)
-      const [cached, available] = await Promise.all([isCached(url), checkUrl(url).then(() => true).catch(() => false)])
+      // 资源缓存以「歌曲ID+音质」为 key（见 getMediaCacheKey），不是播放 URL：
+      // CDN 直链带时效签名，拿 URL 查缓存会把已经缓存好的歌曲误判成未缓存，
+      // 白白触发一次重新解析（换新链接 -> 缓存 key 再变一次）。
+      const cacheKey = getMediaCacheKey(info.musicInfo as LX.Music.MusicInfo | LX.Download.ListItem)
+      const [cached, available] = await Promise.all([
+        cacheKey ? isCached(cacheKey) : Promise.resolve(true),
+        checkUrl(url).then(() => true).catch(() => false),
+      ])
       if (!cached && !available) {
-        const url = await getMusicUrl({ musicInfo: info.musicInfo, isRefresh: true }).catch(() => '')
-        console.log('preload url refresh', url)
+        // 重新解析会跳过 URL 缓存拿到新链接，这里显式写回，
+        // 保证稍后正式播放用的是同一条链接（避免「播放用 A、记录是 B」的错位）。
+        const newUrl = await getMusicUrl({ musicInfo: info.musicInfo, isRefresh: true }).catch(() => '')
+        console.log('preload url refresh', newUrl)
+        if (newUrl) {
+          const onlineInfo = ('progress' in info.musicInfo
+            ? info.musicInfo.metadata.musicInfo
+            : info.musicInfo) as LX.Music.MusicInfoOnline
+          const quality = getPlayQuality(settingState.setting['player.playQuality'], onlineInfo)
+          void saveMusicUrl(onlineInfo, quality, newUrl).catch(() => {})
+        }
       }
     }
   }

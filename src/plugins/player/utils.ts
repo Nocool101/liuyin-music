@@ -26,8 +26,8 @@ export const isEmpty = (trackId = global.lx.playerTrackId) => {
 }
 export const isTempId = (trackId = global.lx.playerTrackId) => !trackId || tempIdRxp.test(trackId)
 
-export const setResource = (musicInfo: LX.Player.PlayMusic, url: string, duration?: number) => {
-  handlePlayMusic(musicInfo, url, duration ?? 0)
+export const setResource = (musicInfo: LX.Player.PlayMusic, url: string, duration?: number, cacheKey?: string) => {
+  handlePlayMusic(musicInfo, url, duration ?? 0, cacheKey)
 }
 
 export const setPlay = async() => liuyinPlay()

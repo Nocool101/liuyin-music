@@ -21,9 +21,8 @@ import {
   removeTempPlayList,
 } from '@/core/player/tempPlayList'
 import { getMusicUrl, getPicPath, getLyricInfo } from '@/core/music'
-import { getPlayQuality } from '@/core/music/utils'
+import { getMediaCacheKey } from '@/core/music/utils'
 import { getProgressSampleTime, setProgress } from '@/core/player/progress'
-import { removeMusicUrl } from '@/utils/data'
 import { requestMsg } from '@/utils/message'
 import { getRandom } from '@/utils/common'
 import { filterList } from './utils'
@@ -170,7 +169,7 @@ export const setMusicUrl = (musicInfo: LX.Music.MusicInfo | LX.Download.ListItem
       global.lx.gettingUrlId = ''
       clearLoadTimeout()
     }
-    setResource(musicInfo, url, playerState.progress.nowPlayTime)
+    setResource(musicInfo, url, playerState.progress.nowPlayTime, getMediaCacheKey(musicInfo))
   }).catch((err: any) => {
     console.log(err)
     setStatusText(err.message as string)
@@ -216,9 +215,9 @@ export const handlePlaybackError = async(message?: string) => {
     return
   }
 
-  // 丢弃坏的缓存链接，重新走完整解析链路（isRefresh 跳过缓存）
-  const targetQuality = getPlayQuality(settingState.setting['player.playQuality'], playMusicInfo)
-  void removeMusicUrl(playMusicInfo, targetQuality).catch(() => {})
+  // 重新走完整解析链路（isRefresh 会跳过 URL 缓存）。
+  // 这里不再 removeMusicUrl：解析失败时旧链接仍在，可以继续用；
+  // 解析成功时 online.ts 会用新链接覆盖写回，URL 缓存与实际播放链接保持一致。
   setMusicUrl(playMusicInfo, true)
 }
 
@@ -300,10 +299,9 @@ export const verifyPlaybackEnded = async(): Promise<boolean> => {
   endedRecovery.count++
 
   setStatusText(global.i18n.t('player__stream_truncated_retry'))
-  const targetQuality = getPlayQuality(settingState.setting['player.playQuality'], musicInfo)
-  void removeMusicUrl(musicInfo, targetQuality).catch(() => {})
   // 进度停在截断点，必须清零后重新加载，否则会从旧位置续播
   setProgress(0, 0)
+  // 同 handlePlaybackError：不预删 URL 缓存，解析成功后由 online.ts 覆盖写回
   setMusicUrl(musicInfo, true)
   return true
 }

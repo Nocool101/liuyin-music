@@ -75,3 +75,24 @@ export const getPlayQuality = (highQuality: LX.Quality, musicInfo: LX.Music.Musi
   }
   return type
 }
+
+/**
+ * 媒体资源缓存 key
+ *
+ * Media3 的 SimpleCache 默认以 DataSpec.key（即播放 URL）为缓存键，而 CDN 直链
+ * 普遍带时效签名，链接一轮换缓存就作废——缓存里的音频文件变成孤儿，每次播放
+ * 都要重新下载一遍（即使同一首歌的音频已经完整躺在缓存里）。
+ *
+ * 改用「歌曲ID + 音质」作为稳定 key：同一首歌同一音质，无论解析多少次、
+ * 直连还是走服务器代理，都命中同一条缓存。
+ *
+ * 与歌曲 URL 缓存（utils/data.ts 的 `${musicInfo.id}_${type}`）保持同一套
+ * 音质口径，避免「URL 缓存命中但资源缓存落空」这类错位。
+ */
+export const getMediaCacheKey = (musicInfo: LX.Music.MusicInfo | LX.Download.ListItem): string => {
+  const onlineInfo = 'progress' in musicInfo ? musicInfo.metadata.musicInfo : musicInfo
+  // 本地文件直接读盘，不经过网络资源缓存
+  if (onlineInfo.source == 'local') return ''
+  const quality = getPlayQuality(settingState.setting['player.playQuality'], onlineInfo as LX.Music.MusicInfoOnline)
+  return `ly_${onlineInfo.id}_${quality}`
+}

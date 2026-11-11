@@ -383,8 +383,15 @@ public class LiuyinPlayer {
         }
     }
 
-    /** 加载并播放（单曲模型 + 静音占位队列，保证系统显示"下一曲"按钮） */
-    public void load(String url, String title, String artist, String album, String artwork, double durationMs, double positionMs) {
+    /**
+     * 加载并播放（单曲模型 + 静音占位队列，保证系统显示"下一曲"按钮）
+     *
+     * cacheKey：稳定的资源缓存键（歌曲ID+音质）。Media3 的 SimpleCache 默认以播放 URL
+     * 为键，而 CDN 直链带时效签名，链接一轮换缓存就作废（缓存里的音频变成孤儿，
+     * 每次播放都重新下载）。指定 customCacheKey 后，同一首歌无论解析多少次、
+     * 直连还是走服务器代理，都命中同一条缓存。为空时退回用 URL 作键。
+     */
+    public void load(String url, String title, String artist, String album, String artwork, double durationMs, double positionMs, String cacheKey) {
         try {
             ExoPlayer p = ensurePlayer();
             MediaMetadata.Builder mb = new MediaMetadata.Builder()
@@ -399,10 +406,13 @@ public class LiuyinPlayer {
                     // ignore invalid uri
                 }
             }
-            MediaItem realItem = new MediaItem.Builder()
+            MediaItem.Builder itemBuilder = new MediaItem.Builder()
                     .setUri(Uri.parse(url))
-                    .setMediaMetadata(mb.build())
-                    .build();
+                    .setMediaMetadata(mb.build());
+            if (cacheKey != null && !cacheKey.isEmpty()) {
+                itemBuilder.setCustomCacheKey(cacheKey);
+            }
+            MediaItem realItem = itemBuilder.build();
             // 只保留真实歌曲为当前媒体项：歌曲结束后元数据不会被静音占位项清空，
             // 系统媒体通知/锁屏按钮在暂停或停止时仍保持可用。
             p.setMediaItem(realItem);
@@ -502,6 +512,7 @@ public class LiuyinPlayer {
                     .putString("artist", artist == null ? "" : artist.toString())
                     .putString("album", album == null ? "" : album.toString())
                     .putString("artwork", item.mediaMetadata.artworkUri == null ? "" : item.mediaMetadata.artworkUri.toString())
+                    .putString("cacheKey", item.localConfiguration.customCacheKey == null ? "" : item.localConfiguration.customCacheKey)
                     .putLong("durationMs", duration == C.TIME_UNSET ? 0 : duration)
                     .putLong("positionMs", position < 0 ? 0 : position)
                     .apply();
@@ -549,7 +560,8 @@ public class LiuyinPlayer {
                     sp.getString("album", ""),
                     sp.getString("artwork", ""),
                     sp.getLong("durationMs", 0),
-                    sp.getLong("positionMs", 0));
+                    sp.getLong("positionMs", 0),
+                    sp.getString("cacheKey", ""));
             android.util.Log.i("LiuyinPlayer", "cold media button: restored last track");
             return true;
         } catch (Throwable t) {

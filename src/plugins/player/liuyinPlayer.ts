@@ -33,10 +33,10 @@ export const addLiuyinPlayerListener = (listener: (data: LiuyinPlayerEventData) 
   }
 }
 
-export const liuyinLoad = (url: string, title: string, artist: string, album: string, artwork: string, durationMs: number, positionMs: number) => {
+export const liuyinLoad = (url: string, title: string, artist: string, album: string, artwork: string, durationMs: number, positionMs: number, cacheKey?: string) => {
   if (!LiuyinPlayer) return
   try {
-    LiuyinPlayer.load(url ?? '', title ?? '', artist ?? '', album ?? '', artwork ?? '', durationMs ?? 0, positionMs ?? 0)
+    LiuyinPlayer.load(url ?? '', title ?? '', artist ?? '', album ?? '', artwork ?? '', durationMs ?? 0, positionMs ?? 0, cacheKey ?? '')
   } catch (err) {
     // ignore
   }

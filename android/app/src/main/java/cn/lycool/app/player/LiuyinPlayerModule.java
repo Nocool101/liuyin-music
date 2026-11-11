@@ -72,11 +72,11 @@ public class LiuyinPlayerModule extends ReactContextBaseJavaModule {
         });
     }
 
-    /** 加载并播放（durationMs/positionMs 为毫秒） */
+    /** 加载并播放（durationMs/positionMs 为毫秒；cacheKey 为稳定的资源缓存键，空串则用 URL 作键） */
     @ReactMethod
-    public void load(String url, String title, String artist, String album, String artwork, double durationMs, double positionMs) {
+    public void load(String url, String title, String artist, String album, String artwork, double durationMs, double positionMs, String cacheKey) {
         runOnMain(() -> LiuyinPlayer.getInstance(getReactApplicationContext())
-                .load(url, title, artist, album, artwork, durationMs, positionMs));
+                .load(url, title, artist, album, artwork, durationMs, positionMs, cacheKey));
     }
 
     @ReactMethod

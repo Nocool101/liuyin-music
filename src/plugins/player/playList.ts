@@ -57,7 +57,7 @@ export const initTrackInfo = async(musicInfo: LX.Player.PlayMusic, mInfo: LX.Pla
   delayUpdateMusicInfo(mInfo)
 }
 
-const handlePlayMusic = async(musicInfo: LX.Player.PlayMusic, url: string, time: number) => {
+const handlePlayMusic = async(musicInfo: LX.Player.PlayMusic, url: string, time: number, cacheKey?: string) => {
   const mInfo = formatMusicInfo(musicInfo)
   const durationMs = (musicInfo as any).duration ?? 0
   currentMusicInfo = mInfo as LX.Player.MusicInfo
@@ -65,9 +65,9 @@ const handlePlayMusic = async(musicInfo: LX.Player.PlayMusic, url: string, time:
   global.lx.waitingForPlayback = true
   try {
     if (time > 0) {
-      liuyinLoad(url, mInfo.name ?? 'Unknow', mInfo.singer ?? 'Unknow', mInfo.album ?? '', mInfo.pic ?? '', durationMs * 1000, time * 1000)
+      liuyinLoad(url, mInfo.name ?? 'Unknow', mInfo.singer ?? 'Unknow', mInfo.album ?? '', mInfo.pic ?? '', durationMs * 1000, time * 1000, cacheKey)
     } else {
-      liuyinLoad(url, mInfo.name ?? 'Unknow', mInfo.singer ?? 'Unknow', mInfo.album ?? '', mInfo.pic ?? '', durationMs * 1000, 0)
+      liuyinLoad(url, mInfo.name ?? 'Unknow', mInfo.singer ?? 'Unknow', mInfo.album ?? '', mInfo.pic ?? '', durationMs * 1000, 0, cacheKey)
     }
   } catch (err) {
     console.error(err)
@@ -77,11 +77,11 @@ const handlePlayMusic = async(musicInfo: LX.Player.PlayMusic, url: string, time:
 
 let playPromise = Promise.resolve()
 let actionId = Math.random()
-export const playMusic = (musicInfo: LX.Player.PlayMusic, url: string, time: number) => {
+export const playMusic = (musicInfo: LX.Player.PlayMusic, url: string, time: number, cacheKey?: string) => {
   const id = actionId = Math.random()
   void playPromise.finally(() => {
     if (id != actionId) return
-    playPromise = handlePlayMusic(musicInfo, url, time)
+    playPromise = handlePlayMusic(musicInfo, url, time, cacheKey)
   })
 }
 
